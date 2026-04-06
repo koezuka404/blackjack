@@ -3,6 +3,5 @@
 .env.*
 !.env.example
 backend/server
-backend/cmd/server/server
 node_modules/
 dist/

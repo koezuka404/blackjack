@@ -16,7 +16,6 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// 仕様スタックの依存を go.mod に残す（未使用でもビルドに含める）
 var (
 	_ = websocket.ErrBadHandshake
 	_ = redis.NewClient(&redis.Options{})

@@ -14,11 +14,6 @@ type HandEvaluator interface {
 	IsSoft(hand []StoredCard) bool
 }
 
-// NextDealerAction applies the spec policy:
-// - Bust: no further draw (terminal)
-// - Soft17: Stand
-// - 17 or higher: Stand
-// - otherwise: Hit
 func NextDealerAction(ev HandEvaluator, dealer []StoredCard) (action DealerAction, terminal bool) {
 	if ev.IsBust(dealer) {
 		return DealerActionStand, true

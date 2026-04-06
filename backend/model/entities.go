@@ -1,6 +1,9 @@
 package model
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 type StoredCard struct {
 	Rank string
@@ -12,17 +15,30 @@ type Room struct {
 	HostUserID       string
 	Status           RoomStatus
 	CurrentSessionID *string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
-func NewRoom(id, hostUserID string) (*Room, error) {
+func NewRoom(id, hostUserID string, at time.Time) (*Room, error) {
 	if id == "" || hostUserID == "" {
 		return nil, fmt.Errorf("room id and host user id are required")
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
 	}
 	return &Room{
 		ID:         id,
 		HostUserID: hostUserID,
 		Status:     RoomStatusWaiting,
+		CreatedAt:  at,
+		UpdatedAt:  at,
 	}, nil
+}
+
+func (r *Room) Touch(at time.Time) {
+	if !at.IsZero() {
+		r.UpdatedAt = at
+	}
 }
 
 func (r *Room) RecalculateStatus(activeHumanPlayers int, hasActiveSession bool) error {
@@ -45,29 +61,52 @@ func (r *Room) RecalculateStatus(activeHumanPlayers int, hasActiveSession bool) 
 }
 
 type GameSession struct {
-	ID       string
-	RoomID   string
-	RoundNo  int
-	Status   SessionStatus
-	Version  int64
-	TurnSeat int
+	ID                string
+	RoomID            string
+	RoundNo           int
+	Status            SessionStatus
+	Version           int64
+	TurnSeat          int
+	Deck              []StoredCard
+	DrawIndex         int
+	TurnDeadlineAt    *time.Time
+	ResultSnapshot    *string
+	RematchDeadlineAt *time.Time
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
-func NewGameSession(id, roomID string, roundNo int) (*GameSession, error) {
+func NewGameSession(id, roomID string, roundNo int, at time.Time) (*GameSession, error) {
 	if id == "" || roomID == "" {
 		return nil, fmt.Errorf("session id and room id are required")
 	}
 	if roundNo <= 0 {
 		return nil, fmt.Errorf("roundNo must be > 0")
 	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
 	return &GameSession{
-		ID:       id,
-		RoomID:   roomID,
-		RoundNo:  roundNo,
-		Status:   SessionStatusDealing,
-		Version:  1,
-		TurnSeat: 1,
+		ID:        id,
+		RoomID:    roomID,
+		RoundNo:   roundNo,
+		Status:    SessionStatusDealing,
+		Version:   1,
+		TurnSeat:  1,
+		DrawIndex: 0,
+		CreatedAt: at,
+		UpdatedAt: at,
 	}, nil
+}
+
+func (s *GameSession) Touch(at time.Time) {
+	if !at.IsZero() {
+		s.UpdatedAt = at
+	}
+}
+
+func (s *GameSession) SetTurnDeadline(at *time.Time) {
+	s.TurnDeadlineAt = at
 }
 
 func (s *GameSession) CheckVersion(expected int64) error {
@@ -107,9 +146,7 @@ func (s *GameSession) TransitionTo(next SessionStatus) error {
 			return ErrInvalidTransition
 		}
 	case SessionStatusResetting:
-		if next != SessionStatusDealing {
-			return ErrInvalidTransition
-		}
+		return ErrInvalidTransition
 	default:
 		return ErrInvalidStatus
 	}
@@ -144,6 +181,10 @@ func NewPlayerState(sessionID, userID string, seatNo int) (*PlayerState, error) 
 	}, nil
 }
 
+func (p *PlayerState) AppendCard(c StoredCard) {
+	p.Hand = append(p.Hand, c)
+}
+
 func (p *PlayerState) SetStatus(next PlayerStatus) error {
 	if !next.IsValid() {
 		return ErrInvalidPlayerStatus
@@ -154,6 +195,15 @@ func (p *PlayerState) SetStatus(next PlayerStatus) error {
 
 func (p *PlayerState) CanAct() bool {
 	return p.Status == PlayerStatusActive
+}
+
+func (p *PlayerState) SetOutcome(score int, o Outcome) error {
+	if !o.IsValid() {
+		return ErrInvalidStatus
+	}
+	p.Outcome = &o
+	p.FinalScore = &score
+	return nil
 }
 
 type DealerState struct {
@@ -172,6 +222,18 @@ func NewDealerState(sessionID string) (*DealerState, error) {
 		HoleHidden: true,
 		Hand:       make([]StoredCard, 0, 5),
 	}, nil
+}
+
+func (d *DealerState) AppendCard(c StoredCard) {
+	d.Hand = append(d.Hand, c)
+}
+
+func (d *DealerState) RevealHole() {
+	d.HoleHidden = false
+}
+
+func (d *DealerState) SetFinalScore(v int) {
+	d.FinalScore = &v
 }
 
 type ActionLog struct {
