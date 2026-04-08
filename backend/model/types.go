@@ -101,4 +101,5 @@ var (
 	ErrNotYourTurn         = fmt.Errorf("not your turn")
 	ErrCannotJoin          = fmt.Errorf("cannot join room in current state")
 	ErrForbiddenStart      = fmt.Errorf("forbidden start")
+	ErrDuplicateAction     = fmt.Errorf("duplicate_action")
 )

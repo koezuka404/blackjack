@@ -7,7 +7,11 @@ import (
 	"os"
 	"time"
 
+	"blackjack/backend/controller"
 	"blackjack/backend/db"
+	"blackjack/backend/middleware"
+	"blackjack/backend/repository/gormrepo"
+	"blackjack/backend/usecase"
 
 	_ "github.com/ethanefung/blackjack"
 	_ "github.com/ethanefung/cards"
@@ -31,8 +35,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("database: %v", err)
 	}
+	store := gormrepo.New(gdb)
+	authUC := usecase.NewAuthUsecase(store)
 
 	e := echo.New()
+	api := e.Group("/api")
+	api.Use(middleware.CSRFMiddleware())
+	controller.NewAuthController(authUC).Register(api)
 	e.GET("/health", func(c echo.Context) error {
 		ctx, cancel := context.WithTimeout(c.Request().Context(), 2*time.Second)
 		defer cancel()
