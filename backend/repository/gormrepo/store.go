@@ -103,6 +103,25 @@ func (s *Store) GetRoom(ctx context.Context, id string) (*model.Room, error) {
 	return db.RoomRecordToDomain(&rec)
 }
 
+func (s *Store) ListRoomsByUserID(ctx context.Context, userID string) ([]*model.Room, error) {
+	var rows []db.RoomRecord
+	if err := s.db.WithContext(ctx).
+		Where("host_user_id = ?", userID).
+		Order("created_at DESC").
+		Find(&rows).Error; err != nil {
+		return nil, mapErr(err)
+	}
+	out := make([]*model.Room, 0, len(rows))
+	for i := range rows {
+		item, err := db.RoomRecordToDomain(&rows[i])
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, nil
+}
+
 func (s *Store) CreateSession(ctx context.Context, session *model.GameSession) error {
 	row, err := db.GameSessionRecordFromDomain(session)
 	if err != nil {
@@ -341,4 +360,26 @@ func (s *Store) GetRoundLog(ctx context.Context, sessionID string, roundNo int) 
 		return nil, mapErr(err)
 	}
 	return db.RoundLogRecordToDomain(&rec)
+}
+
+func (s *Store) ListRoundLogsByRoomID(ctx context.Context, roomID string) ([]*model.RoundLog, error) {
+	var rows []db.RoundLogRecord
+	err := s.db.WithContext(ctx).
+		Table("round_logs").
+		Joins("JOIN game_sessions ON game_sessions.id = round_logs.session_id").
+		Where("game_sessions.room_id = ?", roomID).
+		Order("round_logs.created_at DESC").
+		Find(&rows).Error
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	out := make([]*model.RoundLog, 0, len(rows))
+	for i := range rows {
+		item, err := db.RoundLogRecordToDomain(&rows[i])
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, nil
 }

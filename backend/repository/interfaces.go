@@ -10,6 +10,7 @@ type RoomRepository interface {
 	CreateRoom(ctx context.Context, room *model.Room) error
 	UpdateRoom(ctx context.Context, room *model.Room) error
 	GetRoom(ctx context.Context, id string) (*model.Room, error)
+	ListRoomsByUserID(ctx context.Context, userID string) ([]*model.Room, error)
 }
 
 type GameSessionRepository interface {
@@ -62,6 +63,7 @@ type RematchVoteRepository interface {
 type RoundLogRepository interface {
 	CreateRoundLog(ctx context.Context, log *model.RoundLog) error
 	GetRoundLog(ctx context.Context, sessionID string, roundNo int) (*model.RoundLog, error)
+	ListRoundLogsByRoomID(ctx context.Context, roomID string) ([]*model.RoundLog, error)
 }
 
 type Store interface {

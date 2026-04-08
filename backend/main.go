@@ -40,8 +40,11 @@ func main() {
 
 	e := echo.New()
 	api := e.Group("/api")
+	api.Use(middleware.AuthMiddleware(store))
 	api.Use(middleware.CSRFMiddleware())
 	controller.NewAuthController(authUC).Register(api)
+	roomUC := usecase.NewRoomUsecase(store)
+	controller.NewRoomController(roomUC).Register(api)
 	e.GET("/health", func(c echo.Context) error {
 		ctx, cancel := context.WithTimeout(c.Request().Context(), 2*time.Second)
 		defer cancel()
