@@ -32,6 +32,7 @@ type PlayerStateRepository interface {
 	CreatePlayerState(ctx context.Context, p *model.PlayerState) error
 	UpdatePlayerState(ctx context.Context, p *model.PlayerState) error
 	GetPlayerState(ctx context.Context, sessionID, userID string) (*model.PlayerState, error)
+	ListPlayerStatesBySessionID(ctx context.Context, sessionID string) ([]*model.PlayerState, error)
 }
 
 type DealerStateRepository interface {

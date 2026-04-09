@@ -228,6 +228,22 @@ func (s *Store) GetPlayerState(ctx context.Context, sessionID, userID string) (*
 	return db.PlayerStateRecordToDomain(&rec)
 }
 
+func (s *Store) ListPlayerStatesBySessionID(ctx context.Context, sessionID string) ([]*model.PlayerState, error) {
+	var rows []db.PlayerStateRecord
+	if err := s.db.WithContext(ctx).Where("session_id = ?", sessionID).Order("seat_no ASC").Find(&rows).Error; err != nil {
+		return nil, mapErr(err)
+	}
+	out := make([]*model.PlayerState, 0, len(rows))
+	for i := range rows {
+		item, err := db.PlayerStateRecordToDomain(&rows[i])
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, nil
+}
+
 func (s *Store) CreateDealerState(ctx context.Context, d *model.DealerState) error {
 	row, err := db.DealerStateRecordFromDomain(d)
 	if err != nil {

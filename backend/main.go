@@ -44,7 +44,11 @@ func main() {
 	api.Use(middleware.CSRFMiddleware())
 	controller.NewAuthController(authUC).Register(api)
 	roomUC := usecase.NewRoomUsecase(store)
-	controller.NewRoomController(roomUC).Register(api)
+	roomController := controller.NewRoomController(roomUC)
+	roomController.Register(api)
+	ws := e.Group("/ws")
+	ws.Use(middleware.AuthMiddleware(store))
+	ws.GET("/rooms/:id", roomController.RoomWS)
 	e.GET("/health", func(c echo.Context) error {
 		ctx, cancel := context.WithTimeout(c.Request().Context(), 2*time.Second)
 		defer cancel()

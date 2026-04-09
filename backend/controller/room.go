@@ -24,11 +24,13 @@ func (r *RoomController) Register(g *echo.Group) {
 	g.POST("/rooms", r.CreateRoom)
 	g.GET("/rooms", r.ListRooms)
 	g.POST("/rooms/:id/join", r.JoinRoom)
+	g.POST("/rooms/:id/leave", r.LeaveRoom)
 	g.GET("/rooms/:id", r.GetRoom)
 	g.GET("/rooms/:id/history", r.GetRoomHistory)
 	g.POST("/rooms/:id/start", r.StartRoom)
 	g.POST("/rooms/:id/hit", r.Hit)
 	g.POST("/rooms/:id/stand", r.Stand)
+	g.POST("/rooms/:id/rematch-vote", r.RematchVote)
 }
 
 func (r *RoomController) CreateRoom(c echo.Context) error {
@@ -69,6 +71,35 @@ func (r *RoomController) JoinRoom(c echo.Context) error {
 			return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
 		}
 	}
+	r.broadcastRoomState(c.Request().Context(), room.ID, userID, "ROOM_STATE_SYNC")
+	return c.JSON(http.StatusOK, dto.OK(dto.CreateRoomData{
+		Room: dto.RoomDetailJSON{
+			ID:         room.ID,
+			HostUserID: room.HostUserID,
+			Status:     string(room.Status),
+		},
+	}))
+}
+
+func (r *RoomController) LeaveRoom(c echo.Context) error {
+	userID, _ := c.Get("user_id").(string)
+	roomID := c.Param("id")
+	room, err := r.room.LeaveRoom(c.Request().Context(), roomID, userID)
+	if err != nil {
+		switch err {
+		case usecase.ErrUnauthorizedUser:
+			return c.JSON(http.StatusUnauthorized, dto.Fail("unauthorized", "login required"))
+		case usecase.ErrInvalidInput:
+			return c.JSON(http.StatusBadRequest, dto.Fail("invalid_input", "room id is required"))
+		case usecase.ErrInvalidGameState:
+			return c.JSON(http.StatusConflict, dto.Fail("invalid_game_state", "cannot leave during active session"))
+		case repository.ErrNotFound:
+			return c.JSON(http.StatusNotFound, dto.Fail("not_found", "room or membership not found"))
+		default:
+			return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
+		}
+	}
+	r.broadcastRoomState(c.Request().Context(), room.ID, userID, "ROOM_STATE_SYNC")
 	return c.JSON(http.StatusOK, dto.OK(dto.CreateRoomData{
 		Room: dto.RoomDetailJSON{
 			ID:         room.ID,
@@ -180,6 +211,7 @@ func (r *RoomController) StartRoom(c echo.Context) error {
 			return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
 		}
 	}
+	r.broadcastRoomState(c.Request().Context(), room.ID, userID, "ROOM_STATE_SYNC")
 	return c.JSON(http.StatusOK, dto.OK(dto.StartRoomData{
 		Room: dto.RoomDetailJSON{
 			ID:         room.ID,
@@ -200,6 +232,47 @@ func (r *RoomController) Stand(c echo.Context) error {
 	return r.turnAction(c, false)
 }
 
+func (r *RoomController) RematchVote(c echo.Context) error {
+	userID, _ := c.Get("user_id").(string)
+	roomID := c.Param("id")
+	var req dto.RematchVoteRequest
+	if err := c.Bind(&req); err != nil || req.ActionID == "" || req.ExpectedVersion <= 0 {
+		return c.JSON(http.StatusBadRequest, dto.Fail("invalid_input", "agree, action_id, expected_version are required"))
+	}
+	room, sess, err := r.room.VoteRematch(c.Request().Context(), roomID, userID, req.Agree, req.ExpectedVersion, req.ActionID)
+	if err != nil {
+		switch err {
+		case usecase.ErrUnauthorizedUser:
+			return c.JSON(http.StatusUnauthorized, dto.Fail("unauthorized", "login required"))
+		case usecase.ErrForbiddenAction:
+			return c.JSON(http.StatusForbidden, dto.Fail("forbidden", "room access denied"))
+		case usecase.ErrInvalidInput:
+			return c.JSON(http.StatusBadRequest, dto.Fail("invalid_input", "invalid rematch vote payload"))
+		case usecase.ErrInvalidGameState:
+			return c.JSON(http.StatusConflict, dto.Fail("invalid_game_state", "rematch voting is unavailable"))
+		case model.ErrVersionConflict:
+			return c.JSON(http.StatusConflict, dto.Fail("version_conflict", "session version conflict"))
+		case model.ErrDuplicateAction:
+			return c.JSON(http.StatusConflict, dto.Fail("duplicate_action", "action id already used with different payload"))
+		case repository.ErrNotFound:
+			return c.JSON(http.StatusNotFound, dto.Fail("not_found", "room or session not found"))
+		default:
+			return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
+		}
+	}
+	r.broadcastRoomState(c.Request().Context(), room.ID, userID, "ROOM_STATE_SYNC")
+	return c.JSON(http.StatusOK, dto.OK(dto.TurnActionData{
+		Room: dto.RoomDetailJSON{
+			ID:         room.ID,
+			HostUserID: room.HostUserID,
+			Status:     string(room.Status),
+		},
+		Session: dto.SessionFromDomain(sess, func(t time.Time) string {
+			return t.UTC().Format(time.RFC3339)
+		}),
+	}))
+}
+
 func (r *RoomController) turnAction(c echo.Context, hit bool) error {
 	userID, _ := c.Get("user_id").(string)
 	roomID := c.Param("id")
@@ -207,15 +280,18 @@ func (r *RoomController) turnAction(c echo.Context, hit bool) error {
 	if err := c.Bind(&req); err != nil || req.ExpectedVersion <= 0 {
 		return c.JSON(http.StatusBadRequest, dto.Fail("invalid_input", "expected_version is required"))
 	}
+	if req.ActionID == "" {
+		return c.JSON(http.StatusBadRequest, dto.Fail("invalid_input", "action_id is required"))
+	}
 	var (
 		room *model.Room
 		sess *model.GameSession
 		err  error
 	)
 	if hit {
-		room, sess, err = r.room.Hit(c.Request().Context(), roomID, userID, req.ExpectedVersion)
+		room, sess, err = r.room.Hit(c.Request().Context(), roomID, userID, req.ExpectedVersion, req.ActionID)
 	} else {
-		room, sess, err = r.room.Stand(c.Request().Context(), roomID, userID, req.ExpectedVersion)
+		room, sess, err = r.room.Stand(c.Request().Context(), roomID, userID, req.ExpectedVersion, req.ActionID)
 	}
 	if err != nil {
 		switch err {
@@ -229,12 +305,15 @@ func (r *RoomController) turnAction(c echo.Context, hit bool) error {
 			return c.JSON(http.StatusConflict, dto.Fail("invalid_game_state", err.Error()))
 		case model.ErrVersionConflict:
 			return c.JSON(http.StatusConflict, dto.Fail("version_conflict", "session version conflict"))
+		case model.ErrDuplicateAction:
+			return c.JSON(http.StatusConflict, dto.Fail("duplicate_action", "action id already used with different payload"))
 		case repository.ErrNotFound:
 			return c.JSON(http.StatusNotFound, dto.Fail("not_found", "room or session not found"))
 		default:
 			return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
 		}
 	}
+	r.broadcastRoomState(c.Request().Context(), room.ID, userID, "ROOM_STATE_SYNC")
 	return c.JSON(http.StatusOK, dto.OK(dto.TurnActionData{
 		Room: dto.RoomDetailJSON{
 			ID:         room.ID,

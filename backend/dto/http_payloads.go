@@ -13,12 +13,19 @@ type StartRoomData struct {
 }
 
 type TurnActionRequest struct {
-	ExpectedVersion int64 `json:"expected_version"`
+	ExpectedVersion int64  `json:"expected_version"`
+	ActionID        string `json:"action_id"`
 }
 
 type TurnActionData struct {
 	Room    RoomDetailJSON `json:"room"`
 	Session SessionJSON    `json:"session"`
+}
+
+type RematchVoteRequest struct {
+	Agree           bool   `json:"agree"`
+	ExpectedVersion int64  `json:"expected_version"`
+	ActionID        string `json:"action_id"`
 }
 
 type ListRoomsData struct {

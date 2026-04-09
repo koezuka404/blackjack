@@ -2,6 +2,8 @@ package usecase
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"math/rand"
@@ -22,11 +24,24 @@ type RoomUsecase interface {
 	CreateRoom(ctx context.Context, hostUserID string) (*model.Room, error)
 	JoinRoom(ctx context.Context, roomID, userID string) (*model.Room, error)
 	GetRoom(ctx context.Context, roomID, userID string) (*model.Room, *model.GameSession, error)
+	GetRoomState(ctx context.Context, roomID, userID string) (*RoomState, error)
 	ListRooms(ctx context.Context, userID string) ([]*model.Room, error)
 	GetRoomHistory(ctx context.Context, roomID, userID string) ([]*model.RoundLog, error)
+	LeaveRoom(ctx context.Context, roomID, userID string) (*model.Room, error)
 	StartRoom(ctx context.Context, roomID, userID string) (*model.Room, *model.GameSession, error)
-	Hit(ctx context.Context, roomID, userID string, expectedVersion int64) (*model.Room, *model.GameSession, error)
-	Stand(ctx context.Context, roomID, userID string, expectedVersion int64) (*model.Room, *model.GameSession, error)
+	Hit(ctx context.Context, roomID, userID string, expectedVersion int64, actionID string) (*model.Room, *model.GameSession, error)
+	Stand(ctx context.Context, roomID, userID string, expectedVersion int64, actionID string) (*model.Room, *model.GameSession, error)
+	VoteRematch(ctx context.Context, roomID, userID string, agree bool, expectedVersion int64, actionID string) (*model.Room, *model.GameSession, error)
+}
+
+type RoomState struct {
+	Room       *model.Room
+	Session    *model.GameSession
+	Dealer     *model.DealerState
+	Players    []*model.PlayerState
+	CanHit     bool
+	CanStand   bool
+	CanRematch bool
 }
 
 type roomService struct {
@@ -159,6 +174,44 @@ func (u *roomService) ListRooms(ctx context.Context, userID string) ([]*model.Ro
 	return u.store.ListRoomsByUserID(ctx, userID)
 }
 
+func (u *roomService) LeaveRoom(ctx context.Context, roomID, userID string) (*model.Room, error) {
+	if userID == "" {
+		return nil, ErrUnauthorizedUser
+	}
+	if roomID == "" {
+		return nil, ErrInvalidInput
+	}
+	room, err := u.store.GetRoom(ctx, roomID)
+	if err != nil {
+		return nil, err
+	}
+	if room.CurrentSessionID != nil {
+		return nil, ErrInvalidGameState
+	}
+	p, err := u.store.GetRoomPlayer(ctx, roomID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if p.Status == model.RoomPlayerLeft {
+		return room, nil
+	}
+	now := time.Now().UTC()
+	p.MarkLeft(now)
+	if err := room.RecalculateStatus(0, false); err != nil {
+		return nil, err
+	}
+	room.Touch(now)
+	if err := u.store.Transaction(ctx, func(tx repository.Store) error {
+		if err := tx.UpdateRoomPlayer(ctx, p); err != nil {
+			return err
+		}
+		return tx.UpdateRoom(ctx, room)
+	}); err != nil {
+		return nil, err
+	}
+	return room, nil
+}
+
 func (u *roomService) GetRoomHistory(ctx context.Context, roomID, userID string) ([]*model.RoundLog, error) {
 	if userID == "" {
 		return nil, ErrUnauthorizedUser
@@ -288,19 +341,19 @@ func (u *roomService) StartRoom(ctx context.Context, roomID, userID string) (*mo
 	return room, sess, nil
 }
 
-func (u *roomService) Hit(ctx context.Context, roomID, userID string, expectedVersion int64) (*model.Room, *model.GameSession, error) {
-	return u.playAction(ctx, roomID, userID, expectedVersion, true)
+func (u *roomService) Hit(ctx context.Context, roomID, userID string, expectedVersion int64, actionID string) (*model.Room, *model.GameSession, error) {
+	return u.playAction(ctx, roomID, userID, expectedVersion, actionID, true)
 }
 
-func (u *roomService) Stand(ctx context.Context, roomID, userID string, expectedVersion int64) (*model.Room, *model.GameSession, error) {
-	return u.playAction(ctx, roomID, userID, expectedVersion, false)
+func (u *roomService) Stand(ctx context.Context, roomID, userID string, expectedVersion int64, actionID string) (*model.Room, *model.GameSession, error) {
+	return u.playAction(ctx, roomID, userID, expectedVersion, actionID, false)
 }
 
-func (u *roomService) playAction(ctx context.Context, roomID, userID string, expectedVersion int64, hit bool) (*model.Room, *model.GameSession, error) {
+func (u *roomService) playAction(ctx context.Context, roomID, userID string, expectedVersion int64, actionID string, hit bool) (*model.Room, *model.GameSession, error) {
 	if userID == "" {
 		return nil, nil, ErrUnauthorizedUser
 	}
-	if roomID == "" || expectedVersion <= 0 {
+	if roomID == "" || expectedVersion <= 0 || actionID == "" {
 		return nil, nil, ErrInvalidInput
 	}
 	room, err := u.store.GetRoom(ctx, roomID)
@@ -330,6 +383,26 @@ func (u *roomService) playAction(ctx context.Context, roomID, userID string, exp
 	}
 	if err := player.AssertCanHitOrStand(sess, userID); err != nil {
 		return nil, nil, err
+	}
+	requestType := "HIT"
+	if !hit {
+		requestType = "STAND"
+	}
+	payload := requestType + ":" + strconv.FormatInt(expectedVersion, 10)
+	hash := sha256.Sum256([]byte(payload))
+	actionLog := &model.ActionLog{
+		SessionID:          sess.ID,
+		ActorType:          model.ActorTypeUser,
+		ActorUserID:        userID,
+		TargetUserID:       userID,
+		ActionID:           actionID,
+		RequestType:        requestType,
+		RequestPayloadHash: hex.EncodeToString(hash[:]),
+	}
+	if _, replay, err := EnsureActionIdempotency(ctx, u.store, actionLog); err != nil {
+		return nil, nil, err
+	} else if replay {
+		return room, sess, nil
 	}
 
 	now := time.Now().UTC()
@@ -408,7 +481,181 @@ func (u *roomService) playAction(ctx context.Context, roomID, userID string, exp
 				return err
 			}
 		}
+		snapshotBytes, err := json.Marshal(map[string]any{
+			"room_id":    room.ID,
+			"session_id": sess.ID,
+			"version":    sess.Version,
+		})
+		if err != nil {
+			return err
+		}
+		if err := SaveActionSuccessSnapshot(ctx, tx, actionLog, string(snapshotBytes)); err != nil {
+			return err
+		}
 		return nil
+	}); err != nil {
+		return nil, nil, err
+	}
+	return room, sess, nil
+}
+
+func (u *roomService) GetRoomState(ctx context.Context, roomID, userID string) (*RoomState, error) {
+	room, sess, err := u.GetRoom(ctx, roomID, userID)
+	if err != nil {
+		return nil, err
+	}
+	state := &RoomState{Room: room, Session: sess}
+	if sess == nil {
+		return state, nil
+	}
+	dealer, err := u.store.GetDealerState(ctx, sess.ID)
+	if err != nil && err != repository.ErrNotFound {
+		return nil, err
+	}
+	players, err := u.store.ListPlayerStatesBySessionID(ctx, sess.ID)
+	if err != nil && err != repository.ErrNotFound {
+		return nil, err
+	}
+	state.Dealer = dealer
+	state.Players = players
+	for _, p := range players {
+		if p.UserID == userID {
+			state.CanHit = p.Status == model.PlayerStatusActive && sess.Status == model.SessionStatusPlayerTurn && sess.TurnSeat == p.SeatNo
+			state.CanStand = state.CanHit
+			break
+		}
+	}
+	state.CanRematch = sess.Status == model.SessionStatusResult
+	return state, nil
+}
+
+func (u *roomService) VoteRematch(ctx context.Context, roomID, userID string, agree bool, expectedVersion int64, actionID string) (*model.Room, *model.GameSession, error) {
+	if userID == "" {
+		return nil, nil, ErrUnauthorizedUser
+	}
+	if roomID == "" || expectedVersion <= 0 || actionID == "" {
+		return nil, nil, ErrInvalidInput
+	}
+	room, err := u.store.GetRoom(ctx, roomID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if _, err := u.store.GetRoomPlayer(ctx, roomID, userID); err != nil {
+		if err == repository.ErrNotFound {
+			return nil, nil, ErrForbiddenAction
+		}
+		return nil, nil, err
+	}
+	sess, err := u.store.GetLatestSessionByRoomID(ctx, roomID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if sess.Status != model.SessionStatusResult {
+		return nil, nil, ErrInvalidGameState
+	}
+	if err := sess.CheckVersion(expectedVersion); err != nil {
+		return nil, nil, err
+	}
+
+	payload := "REMATCH_VOTE:" + strconv.FormatBool(agree) + ":" + strconv.FormatInt(expectedVersion, 10)
+	hash := sha256.Sum256([]byte(payload))
+	actionLog := &model.ActionLog{
+		SessionID:          sess.ID,
+		ActorType:          model.ActorTypeUser,
+		ActorUserID:        userID,
+		TargetUserID:       userID,
+		ActionID:           actionID,
+		RequestType:        "REMATCH_VOTE",
+		RequestPayloadHash: hex.EncodeToString(hash[:]),
+	}
+	if _, replay, err := EnsureActionIdempotency(ctx, u.store, actionLog); err != nil {
+		return nil, nil, err
+	} else if replay {
+		return room, sess, nil
+	}
+
+	vote := &model.RematchVote{
+		SessionID: sess.ID,
+		UserID:    userID,
+		Agree:     agree,
+	}
+	now := time.Now().UTC()
+	if sess.RematchDeadlineAt == nil {
+		sess.SetRematchDeadline(now)
+	}
+
+	eligible := []string{room.HostUserID}
+	votes, err := u.store.ListRematchVotes(ctx, sess.ID)
+	if err != nil && err != repository.ErrNotFound {
+		return nil, nil, err
+	}
+	agreeMap := map[string]bool{}
+	for _, v := range votes {
+		agreeMap[v.UserID] = v.Agree
+	}
+	agreeMap[userID] = agree
+
+	if err := u.store.Transaction(ctx, func(tx repository.Store) error {
+		if err := tx.UpsertRematchVote(ctx, vote); err != nil {
+			return err
+		}
+		sess.IncrementVersion()
+		sess.Touch(now)
+		ok, err := tx.UpdateSessionIfVersion(ctx, sess, expectedVersion)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return model.ErrVersionConflict
+		}
+		if model.RematchUnanimous(eligible, agreeMap) {
+			next, err := model.NewGameSession(uuid.NewString(), roomID, sess.RoundNo+1, now)
+			if err != nil {
+				return err
+			}
+			next.SetDeck(newShuffledDeck(now.UnixNano()))
+			dealer, err := model.NewDealerState(next.ID)
+			if err != nil {
+				return err
+			}
+			pstate, err := model.NewPlayerState(next.ID, room.HostUserID, 1)
+			if err != nil {
+				return err
+			}
+			if err := initialDeal(next, pstate, dealer); err != nil {
+				return err
+			}
+			if err := next.TransitionTo(model.SessionStatusPlayerTurn); err != nil {
+				return err
+			}
+			room.CurrentSessionID = &next.ID
+			if err := room.RecalculateStatus(1, true); err != nil {
+				return err
+			}
+			room.Touch(now)
+			if err := tx.CreateSession(ctx, next); err != nil {
+				return err
+			}
+			if err := tx.CreatePlayerState(ctx, pstate); err != nil {
+				return err
+			}
+			if err := tx.CreateDealerState(ctx, dealer); err != nil {
+				return err
+			}
+			if err := tx.UpdateRoom(ctx, room); err != nil {
+				return err
+			}
+			sess = next
+		}
+		snapshotBytes, err := json.Marshal(map[string]any{
+			"room_id":    room.ID,
+			"session_id": sess.ID,
+			"version":    sess.Version,
+		})
+		if err != nil {
+			return err
+		}
+		return SaveActionSuccessSnapshot(ctx, tx, actionLog, string(snapshotBytes))
 	}); err != nil {
 		return nil, nil, err
 	}
