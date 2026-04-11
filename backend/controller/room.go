@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"blackjack/backend/dto"
+	"blackjack/backend/middleware"
 	"blackjack/backend/model"
 	"blackjack/backend/repository"
 	"blackjack/backend/usecase"
@@ -13,11 +14,12 @@ import (
 )
 
 type RoomController struct {
-	room usecase.RoomUsecase
+	room    usecase.RoomUsecase
+	limiter middleware.RateLimiter
 }
 
-func NewRoomController(room usecase.RoomUsecase) *RoomController {
-	return &RoomController{room: room}
+func NewRoomController(room usecase.RoomUsecase, limiter middleware.RateLimiter) *RoomController {
+	return &RoomController{room: room, limiter: limiter}
 }
 
 func (r *RoomController) Register(g *echo.Group) {
@@ -30,7 +32,6 @@ func (r *RoomController) Register(g *echo.Group) {
 	g.POST("/rooms/:id/start", r.StartRoom)
 	g.POST("/rooms/:id/hit", r.Hit)
 	g.POST("/rooms/:id/stand", r.Stand)
-	g.POST("/rooms/:id/rematch-vote", r.RematchVote)
 }
 
 func (r *RoomController) CreateRoom(c echo.Context) error {

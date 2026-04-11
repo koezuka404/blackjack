@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"blackjack/backend/adapter/blackjackadapter"
 	"blackjack/backend/model"
 	"blackjack/backend/repository"
 
@@ -19,6 +20,8 @@ import (
 var ErrUnauthorizedUser = errors.New("unauthorized")
 var ErrInvalidGameState = errors.New("invalid_game_state")
 var ErrForbiddenAction = errors.New("forbidden")
+
+const PlayerTurnTimeout = 15 * time.Second
 
 type RoomUsecase interface {
 	CreateRoom(ctx context.Context, hostUserID string) (*model.Room, error)
@@ -32,6 +35,9 @@ type RoomUsecase interface {
 	Hit(ctx context.Context, roomID, userID string, expectedVersion int64, actionID string) (*model.Room, *model.GameSession, error)
 	Stand(ctx context.Context, roomID, userID string, expectedVersion int64, actionID string) (*model.Room, *model.GameSession, error)
 	VoteRematch(ctx context.Context, roomID, userID string, agree bool, expectedVersion int64, actionID string) (*model.Room, *model.GameSession, error)
+	MarkConnected(ctx context.Context, roomID, userID string) error
+	MarkDisconnected(ctx context.Context, roomID, userID string) error
+	AutoStandDueSessions(ctx context.Context) ([]string, error)
 }
 
 type RoomState struct {
@@ -45,11 +51,15 @@ type RoomState struct {
 }
 
 type roomService struct {
-	store repository.Store
+	store     repository.Store
+	evaluator model.HandEvaluator
 }
 
 func NewRoomUsecase(store repository.Store) RoomUsecase {
-	return &roomService{store: store}
+	return &roomService{
+		store:     store,
+		evaluator: blackjackadapter.NewHandEvaluator(),
+	}
 }
 
 func (u *roomService) CreateRoom(ctx context.Context, hostUserID string) (*model.Room, error) {
@@ -295,24 +305,19 @@ func (u *roomService) StartRoom(ctx context.Context, roomID, userID string) (*mo
 	if err := sess.TransitionTo(model.SessionStatusPlayerTurn); err != nil {
 		return nil, nil, err
 	}
+	deadline := now.Add(PlayerTurnTimeout)
+	sess.SetTurnDeadline(&deadline)
 
-	needsSettle := isBlackjack(pstate.Hand)
-	var roundLog *model.RoundLog
-	if needsSettle {
+	if u.evaluator.IsBlackjack(pstate.Hand) {
 		if err := pstate.SetStatus(model.PlayerStatusBlackjack); err != nil {
 			return nil, nil, err
 		}
 		if err := sess.TransitionTo(model.SessionStatusDealerTurn); err != nil {
 			return nil, nil, err
 		}
-		roundLog, err = settleDealerAndResult(sess, pstate, dealer, now)
-		if err != nil {
-			return nil, nil, err
-		}
-		room.CurrentSessionID = nil
-	} else {
-		room.CurrentSessionID = &sess.ID
+		sess.SetTurnDeadline(nil)
 	}
+	room.CurrentSessionID = &sess.ID
 	if err := room.RecalculateStatus(1, room.CurrentSessionID != nil); err != nil {
 		return nil, nil, err
 	}
@@ -328,11 +333,6 @@ func (u *roomService) StartRoom(ctx context.Context, roomID, userID string) (*mo
 		}
 		if err := tx.CreateDealerState(ctx, dealer); err != nil {
 			return err
-		}
-		if roundLog != nil {
-			if err := tx.CreateRoundLog(ctx, roundLog); err != nil {
-				return err
-			}
 		}
 		return tx.UpdateRoom(ctx, room)
 	}); err != nil {
@@ -406,14 +406,13 @@ func (u *roomService) playAction(ctx context.Context, roomID, userID string, exp
 	}
 
 	now := time.Now().UTC()
-	var roundLog *model.RoundLog
 	if hit {
 		card, err := sess.DrawCard()
 		if err != nil {
 			return nil, nil, err
 		}
 		player.AppendCard(card)
-		v := handValue(player.Hand)
+		v := u.evaluator.Value(player.Hand)
 		if v > 21 {
 			if err := player.SetStatus(model.PlayerStatusBust); err != nil {
 				return nil, nil, err
@@ -421,42 +420,37 @@ func (u *roomService) playAction(ctx context.Context, roomID, userID string, exp
 			if err := sess.TransitionTo(model.SessionStatusDealerTurn); err != nil {
 				return nil, nil, err
 			}
-			roundLog, err = settleDealerAndResult(sess, player, dealer, now)
-			if err != nil {
-				return nil, nil, err
-			}
-		} else if isBlackjack(player.Hand) {
+			sess.SetTurnDeadline(nil)
+		} else if u.evaluator.IsBlackjack(player.Hand) {
 			if err := player.SetStatus(model.PlayerStatusBlackjack); err != nil {
 				return nil, nil, err
 			}
 			if err := sess.TransitionTo(model.SessionStatusDealerTurn); err != nil {
 				return nil, nil, err
 			}
-			roundLog, err = settleDealerAndResult(sess, player, dealer, now)
-			if err != nil {
-				return nil, nil, err
-			}
+			sess.SetTurnDeadline(nil)
 		}
 	} else {
+		nextDeadline := now.Add(PlayerTurnTimeout)
+		sess.SetTurnDeadline(&nextDeadline)
 		if err := player.SetStatus(model.PlayerStatusStand); err != nil {
 			return nil, nil, err
 		}
 		if err := sess.TransitionTo(model.SessionStatusDealerTurn); err != nil {
 			return nil, nil, err
 		}
-		roundLog, err = settleDealerAndResult(sess, player, dealer, now)
-		if err != nil {
-			return nil, nil, err
-		}
+		sess.SetTurnDeadline(nil)
 	}
 
-	if roundLog != nil {
-		room.CurrentSessionID = nil
-		if err := room.RecalculateStatus(1, false); err != nil {
-			return nil, nil, err
-		}
-		room.Touch(now)
+	if sess.Status == model.SessionStatusPlayerTurn {
+		nextDeadline := now.Add(PlayerTurnTimeout)
+		sess.SetTurnDeadline(&nextDeadline)
 	}
+	if err := room.RecalculateStatus(1, true); err != nil {
+		return nil, nil, err
+	}
+	room.CurrentSessionID = &sess.ID
+	room.Touch(now)
 	sess.IncrementVersion()
 	sess.Touch(now)
 	if err := u.store.Transaction(ctx, func(tx repository.Store) error {
@@ -473,13 +467,8 @@ func (u *roomService) playAction(ctx context.Context, roomID, userID string, exp
 		if err := tx.UpdateDealerState(ctx, dealer); err != nil {
 			return err
 		}
-		if roundLog != nil {
-			if err := tx.CreateRoundLog(ctx, roundLog); err != nil {
-				return err
-			}
-			if err := tx.UpdateRoom(ctx, room); err != nil {
-				return err
-			}
+		if err := tx.UpdateRoom(ctx, room); err != nil {
+			return err
 		}
 		snapshotBytes, err := json.Marshal(map[string]any{
 			"room_id":    room.ID,
@@ -525,7 +514,7 @@ func (u *roomService) GetRoomState(ctx context.Context, roomID, userID string) (
 			break
 		}
 	}
-	state.CanRematch = sess.Status == model.SessionStatusResult
+	state.CanRematch = sess.Status == model.SessionStatusResetting
 	return state, nil
 }
 
@@ -550,7 +539,7 @@ func (u *roomService) VoteRematch(ctx context.Context, roomID, userID string, ag
 	if err != nil {
 		return nil, nil, err
 	}
-	if sess.Status != model.SessionStatusResult {
+	if sess.Status != model.SessionStatusResetting {
 		return nil, nil, ErrInvalidGameState
 	}
 	if err := sess.CheckVersion(expectedVersion); err != nil {
@@ -686,25 +675,18 @@ func initialDeal(sess *model.GameSession, p *model.PlayerState, d *model.DealerS
 	return nil
 }
 
-func settleDealerAndResult(sess *model.GameSession, p *model.PlayerState, d *model.DealerState, now time.Time) (*model.RoundLog, error) {
+func settleDealerAndResult(ev model.HandEvaluator, sess *model.GameSession, p *model.PlayerState, d *model.DealerState, now time.Time) (*model.RoundLog, error) {
 	d.RevealHole()
-	for {
-		action, terminal := model.NextDealerAction(simpleHandEvaluator{}, d.Hand)
-		if terminal || action == model.DealerActionStand {
-			break
-		}
-		card, err := sess.DrawCard()
-		if err != nil {
-			return nil, err
-		}
-		d.AppendCard(card)
-	}
 	if err := sess.TransitionTo(model.SessionStatusResult); err != nil {
 		return nil, err
 	}
-	pScore := handValue(p.Hand)
-	dScore := handValue(d.Hand)
-	outcome, err := model.ResolveRoundOutcome(simpleHandEvaluator{}, p.Hand, d.Hand)
+	if err := sess.TransitionTo(model.SessionStatusResetting); err != nil {
+		return nil, err
+	}
+	sess.SetRematchDeadline(now)
+	pScore := ev.Value(p.Hand)
+	dScore := ev.Value(d.Hand)
+	outcome, err := model.ResolveRoundOutcome(ev, p.Hand, d.Hand)
 	if err != nil {
 		return nil, err
 	}
@@ -728,65 +710,226 @@ func settleDealerAndResult(sess *model.GameSession, p *model.PlayerState, d *mod
 	}, nil
 }
 
-type simpleHandEvaluator struct{}
-
-func (simpleHandEvaluator) Value(hand []model.StoredCard) int        { return handValue(hand) }
-func (simpleHandEvaluator) IsBlackjack(hand []model.StoredCard) bool { return isBlackjack(hand) }
-func (simpleHandEvaluator) IsBust(hand []model.StoredCard) bool      { return handValue(hand) > 21 }
-func (simpleHandEvaluator) IsSoft(hand []model.StoredCard) bool      { return isSoftHand(hand) }
-
-func handValue(hand []model.StoredCard) int {
-	total := 0
-	aces := 0
-	for _, c := range hand {
-		switch c.Rank {
-		case "A":
-			total += 11
-			aces++
-		case "K", "Q", "J", "10":
-			total += 10
-		default:
-			n, err := strconv.Atoi(c.Rank)
-			if err != nil || n < 2 || n > 9 {
-				continue
-			}
-			total += n
-		}
+func (u *roomService) MarkConnected(ctx context.Context, roomID, userID string) error {
+	if roomID == "" || userID == "" {
+		return ErrInvalidInput
 	}
-	for total > 21 && aces > 0 {
-		total -= 10
-		aces--
+	p, err := u.store.GetRoomPlayer(ctx, roomID, userID)
+	if err != nil {
+		return err
 	}
-	return total
+	if p.Status == model.RoomPlayerLeft || p.Status == model.RoomPlayerActive {
+		return nil
+	}
+	if err := p.SetStatus(model.RoomPlayerActive); err != nil {
+		return err
+	}
+	return u.store.UpdateRoomPlayer(ctx, p)
 }
 
-func isBlackjack(hand []model.StoredCard) bool {
-	return len(hand) == 2 && handValue(hand) == 21
+func (u *roomService) MarkDisconnected(ctx context.Context, roomID, userID string) error {
+	if roomID == "" || userID == "" {
+		return ErrInvalidInput
+	}
+	p, err := u.store.GetRoomPlayer(ctx, roomID, userID)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			return nil
+		}
+		return err
+	}
+	if p.Status == model.RoomPlayerLeft || p.Status == model.RoomPlayerDisconnected {
+		return nil
+	}
+	if err := p.SetStatus(model.RoomPlayerDisconnected); err != nil {
+		return err
+	}
+	return u.store.UpdateRoomPlayer(ctx, p)
 }
 
-func isSoftHand(hand []model.StoredCard) bool {
-	total := 0
-	aces := 0
-	for _, c := range hand {
-		switch c.Rank {
-		case "A":
-			total += 11
-			aces++
-		case "K", "Q", "J", "10":
-			total += 10
-		default:
-			n, err := strconv.Atoi(c.Rank)
-			if err != nil || n < 2 || n > 9 {
-				continue
-			}
-			total += n
+func (u *roomService) AutoStandDueSessions(ctx context.Context) ([]string, error) {
+	now := time.Now().UTC()
+	sessions, err := u.store.ListSessionsByStatusAndDeadlineBefore(ctx, model.SessionStatusPlayerTurn, now)
+	if err != nil {
+		return nil, err
+	}
+	updatedRooms := make([]string, 0, len(sessions))
+	seen := map[string]struct{}{}
+	for _, sess := range sessions {
+		if err := u.autoStandOne(ctx, sess.ID); err != nil && err != repository.ErrNotFound && err != model.ErrVersionConflict {
+			return nil, err
+		}
+		if _, ok := seen[sess.RoomID]; !ok {
+			seen[sess.RoomID] = struct{}{}
+			updatedRooms = append(updatedRooms, sess.RoomID)
 		}
 	}
-	for total > 21 && aces > 0 {
-		total -= 10
-		aces--
+	dealerSessions, err := u.store.ListSessionsByStatus(ctx, model.SessionStatusDealerTurn)
+	if err != nil {
+		return nil, err
 	}
-	return aces > 0
+	for _, sess := range dealerSessions {
+		if err := u.advanceDealerOneStep(ctx, sess.ID); err != nil && err != repository.ErrNotFound && err != model.ErrVersionConflict {
+			return nil, err
+		}
+		if _, ok := seen[sess.RoomID]; !ok {
+			seen[sess.RoomID] = struct{}{}
+			updatedRooms = append(updatedRooms, sess.RoomID)
+		}
+	}
+	return updatedRooms, nil
+}
+
+func (u *roomService) autoStandOne(ctx context.Context, sessionID string) error {
+	sess, err := u.store.GetSession(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if sess.Status != model.SessionStatusPlayerTurn || sess.TurnDeadlineAt == nil || sess.TurnDeadlineAt.After(time.Now().UTC()) {
+		return nil
+	}
+	room, err := u.store.GetRoom(ctx, sess.RoomID)
+	if err != nil {
+		return err
+	}
+	players, err := u.store.ListPlayerStatesBySessionID(ctx, sess.ID)
+	if err != nil {
+		return err
+	}
+	if len(players) == 0 {
+		return repository.ErrNotFound
+	}
+	player := players[0]
+	dealer, err := u.store.GetDealerState(ctx, sess.ID)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	if err := player.SetStatus(model.PlayerStatusStand); err != nil {
+		return err
+	}
+	if err := sess.TransitionTo(model.SessionStatusDealerTurn); err != nil {
+		return err
+	}
+	room.CurrentSessionID = &sess.ID
+	if err := room.RecalculateStatus(1, true); err != nil {
+		return err
+	}
+	room.Touch(now)
+	sess.SetTurnDeadline(nil)
+	sess.IncrementVersion()
+	sess.Touch(now)
+	sysActionID := "auto-stand:" + sessionID + ":" + strconv.FormatInt(sess.Version, 10)
+	hash := sha256.Sum256([]byte("AUTO_STAND:" + strconv.FormatInt(sess.Version, 10)))
+	actionLog := &model.ActionLog{
+		SessionID:          sess.ID,
+		ActorType:          model.ActorTypeSystem,
+		ActorUserID:        "",
+		TargetUserID:       player.UserID,
+		ActionID:           sysActionID,
+		RequestType:        "AUTO_STAND",
+		RequestPayloadHash: hex.EncodeToString(hash[:]),
+	}
+	return u.store.Transaction(ctx, func(tx repository.Store) error {
+		ok, err := tx.UpdateSessionIfVersion(ctx, sess, sess.Version-1)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return model.ErrVersionConflict
+		}
+		if err := tx.UpdatePlayerState(ctx, player); err != nil {
+			return err
+		}
+		if err := tx.UpdateDealerState(ctx, dealer); err != nil {
+			return err
+		}
+		if err := tx.UpdateRoom(ctx, room); err != nil {
+			return err
+		}
+		snapshotBytes, err := json.Marshal(map[string]any{
+			"room_id":    room.ID,
+			"session_id": sess.ID,
+			"version":    sess.Version,
+		})
+		if err != nil {
+			return err
+		}
+		return SaveActionSuccessSnapshot(ctx, tx, actionLog, string(snapshotBytes))
+	})
+}
+
+func (u *roomService) advanceDealerOneStep(ctx context.Context, sessionID string) error {
+	sess, err := u.store.GetSession(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if sess.Status != model.SessionStatusDealerTurn {
+		return nil
+	}
+	room, err := u.store.GetRoom(ctx, sess.RoomID)
+	if err != nil {
+		return err
+	}
+	players, err := u.store.ListPlayerStatesBySessionID(ctx, sess.ID)
+	if err != nil {
+		return err
+	}
+	if len(players) == 0 {
+		return repository.ErrNotFound
+	}
+	player := players[0]
+	dealer, err := u.store.GetDealerState(ctx, sess.ID)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	action, terminal := model.NextDealerAction(u.evaluator, dealer.Hand)
+	sessPrev := sess.Version
+	var roundLog *model.RoundLog
+	if terminal || action == model.DealerActionStand {
+		roundLog, err = settleDealerAndResult(u.evaluator, sess, player, dealer, now)
+		if err != nil {
+			return err
+		}
+		room.CurrentSessionID = &sess.ID
+		if err := room.RecalculateStatus(1, true); err != nil {
+			return err
+		}
+		room.Touch(now)
+	} else {
+		card, err := sess.DrawCard()
+		if err != nil {
+			return err
+		}
+		dealer.AppendCard(card)
+	}
+	sess.IncrementVersion()
+	sess.Touch(now)
+	return u.store.Transaction(ctx, func(tx repository.Store) error {
+		ok, err := tx.UpdateSessionIfVersion(ctx, sess, sessPrev)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return model.ErrVersionConflict
+		}
+		if err := tx.UpdateDealerState(ctx, dealer); err != nil {
+			return err
+		}
+		if roundLog != nil {
+			if err := tx.UpdatePlayerState(ctx, player); err != nil {
+				return err
+			}
+			if err := tx.CreateRoundLog(ctx, roundLog); err != nil {
+				return err
+			}
+			if err := tx.UpdateRoom(ctx, room); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func newShuffledDeck(seed int64) []model.StoredCard {

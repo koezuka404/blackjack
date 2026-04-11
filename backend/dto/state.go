@@ -50,3 +50,21 @@ type RoomStateSyncJSON struct {
 	Players   []PlayerJSON  `json:"players"`
 	MyActions MyActionsJSON `json:"my_actions"`
 }
+
+type RoomStateSyncSessionJSON struct {
+	ID                *string `json:"id"`
+	Status            *string `json:"status"`
+	Version           *int64  `json:"version"`
+	RoundNo           *int    `json:"round_no"`
+	TurnSeat          *int    `json:"turn_seat"`
+	TurnDeadlineAt    *string `json:"turn_deadline_at"`
+	RematchDeadlineAt *string `json:"rematch_deadline_at"`
+}
+
+type RoomStateSyncPayload struct {
+	Room      RoomJSON                 `json:"room"`
+	Session   RoomStateSyncSessionJSON `json:"session"`
+	Dealer    DealerJSON               `json:"dealer"`
+	Players   []PlayerJSON             `json:"players"`
+	MyActions MyActionsJSON            `json:"my_actions"`
+}

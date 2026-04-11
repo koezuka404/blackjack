@@ -1,4 +1,4 @@
-package db
+package gormrepo
 
 import (
 	"encoding/json"
@@ -26,7 +26,7 @@ func unmarshalStoredCards(b []byte) ([]model.StoredCard, error) {
 	return c, nil
 }
 
-func RoomRecordFromDomain(r *model.Room) (*RoomRecord, error) {
+func roomRecordFromDomain(r *model.Room) (*RoomRecord, error) {
 	if r == nil {
 		return nil, nil
 	}
@@ -40,7 +40,7 @@ func RoomRecordFromDomain(r *model.Room) (*RoomRecord, error) {
 	}, nil
 }
 
-func RoomRecordToDomain(m *RoomRecord) (*model.Room, error) {
+func roomRecordToDomain(m *RoomRecord) (*model.Room, error) {
 	if m == nil {
 		return nil, nil
 	}
@@ -58,7 +58,7 @@ func RoomRecordToDomain(m *RoomRecord) (*model.Room, error) {
 	}, nil
 }
 
-func GameSessionRecordFromDomain(s *model.GameSession) (*GameSessionRecord, error) {
+func gameSessionRecordFromDomain(s *model.GameSession) (*GameSessionRecord, error) {
 	if s == nil {
 		return nil, nil
 	}
@@ -87,7 +87,7 @@ func GameSessionRecordFromDomain(s *model.GameSession) (*GameSessionRecord, erro
 	}, nil
 }
 
-func GameSessionRecordToDomain(m *GameSessionRecord) (*model.GameSession, error) {
+func gameSessionRecordToDomain(m *GameSessionRecord) (*model.GameSession, error) {
 	if m == nil {
 		return nil, nil
 	}
@@ -121,7 +121,7 @@ func GameSessionRecordToDomain(m *GameSessionRecord) (*model.GameSession, error)
 	}, nil
 }
 
-func PlayerStateRecordFromDomain(p *model.PlayerState) (*PlayerStateRecord, error) {
+func playerStateRecordFromDomain(p *model.PlayerState) (*PlayerStateRecord, error) {
 	if p == nil {
 		return nil, nil
 	}
@@ -145,7 +145,7 @@ func PlayerStateRecordFromDomain(p *model.PlayerState) (*PlayerStateRecord, erro
 	}, nil
 }
 
-func PlayerStateRecordToDomain(m *PlayerStateRecord) (*model.PlayerState, error) {
+func playerStateRecordToDomain(m *PlayerStateRecord) (*model.PlayerState, error) {
 	if m == nil {
 		return nil, nil
 	}
@@ -176,7 +176,7 @@ func PlayerStateRecordToDomain(m *PlayerStateRecord) (*model.PlayerState, error)
 	}, nil
 }
 
-func DealerStateRecordFromDomain(d *model.DealerState) (*DealerStateRecord, error) {
+func dealerStateRecordFromDomain(d *model.DealerState) (*DealerStateRecord, error) {
 	if d == nil {
 		return nil, nil
 	}
@@ -192,7 +192,7 @@ func DealerStateRecordFromDomain(d *model.DealerState) (*DealerStateRecord, erro
 	}, nil
 }
 
-func DealerStateRecordToDomain(m *DealerStateRecord) (*model.DealerState, error) {
+func dealerStateRecordToDomain(m *DealerStateRecord) (*model.DealerState, error) {
 	if m == nil {
 		return nil, nil
 	}
@@ -208,7 +208,7 @@ func DealerStateRecordToDomain(m *DealerStateRecord) (*model.DealerState, error)
 	}, nil
 }
 
-func UserRecordFromDomain(u *model.User) (*UserRecord, error) {
+func userRecordFromDomain(u *model.User) (*UserRecord, error) {
 	if u == nil {
 		return nil, nil
 	}
@@ -221,7 +221,7 @@ func UserRecordFromDomain(u *model.User) (*UserRecord, error) {
 	}, nil
 }
 
-func UserRecordToDomain(m *UserRecord) (*model.User, error) {
+func userRecordToDomain(m *UserRecord) (*model.User, error) {
 	if m == nil {
 		return nil, nil
 	}
@@ -234,7 +234,7 @@ func UserRecordToDomain(m *UserRecord) (*model.User, error) {
 	}, nil
 }
 
-func SessionRecordFromDomain(s *model.Session) (*SessionRecord, error) {
+func authSessionRecordFromDomain(s *model.Session) (*SessionRecord, error) {
 	if s == nil {
 		return nil, nil
 	}
@@ -246,7 +246,7 @@ func SessionRecordFromDomain(s *model.Session) (*SessionRecord, error) {
 	}, nil
 }
 
-func SessionRecordToDomain(m *SessionRecord) (*model.Session, error) {
+func authSessionRecordToDomain(m *SessionRecord) (*model.Session, error) {
 	if m == nil {
 		return nil, nil
 	}
@@ -258,7 +258,7 @@ func SessionRecordToDomain(m *SessionRecord) (*model.Session, error) {
 	}, nil
 }
 
-func RoomPlayerRecordFromDomain(p *model.RoomPlayer) (*RoomPlayerRecord, error) {
+func roomPlayerRecordFromDomain(p *model.RoomPlayer) (*RoomPlayerRecord, error) {
 	if p == nil {
 		return nil, nil
 	}
@@ -272,7 +272,7 @@ func RoomPlayerRecordFromDomain(p *model.RoomPlayer) (*RoomPlayerRecord, error) 
 	}, nil
 }
 
-func RoomPlayerRecordToDomain(m *RoomPlayerRecord) (*model.RoomPlayer, error) {
+func roomPlayerRecordToDomain(m *RoomPlayerRecord) (*model.RoomPlayer, error) {
 	if m == nil {
 		return nil, nil
 	}
@@ -290,7 +290,7 @@ func RoomPlayerRecordToDomain(m *RoomPlayerRecord) (*model.RoomPlayer, error) {
 	}, nil
 }
 
-func ActionLogRecordFromDomain(a *model.ActionLog) (*ActionLogRecord, error) {
+func actionLogRecordFromDomain(a *model.ActionLog) (*ActionLogRecord, error) {
 	if a == nil {
 		return nil, nil
 	}
@@ -306,7 +306,7 @@ func ActionLogRecordFromDomain(a *model.ActionLog) (*ActionLogRecord, error) {
 	}, nil
 }
 
-func ActionLogRecordToDomain(m *ActionLogRecord) (*model.ActionLog, error) {
+func actionLogRecordToDomain(m *ActionLogRecord) (*model.ActionLog, error) {
 	if m == nil {
 		return nil, nil
 	}
@@ -326,7 +326,7 @@ func ActionLogRecordToDomain(m *ActionLogRecord) (*model.ActionLog, error) {
 	}, nil
 }
 
-func RematchVoteRecordFromDomain(v *model.RematchVote) (*RematchVoteRecord, error) {
+func rematchVoteRecordFromDomain(v *model.RematchVote) (*RematchVoteRecord, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -337,7 +337,7 @@ func RematchVoteRecordFromDomain(v *model.RematchVote) (*RematchVoteRecord, erro
 	}, nil
 }
 
-func RematchVoteRecordToDomain(m *RematchVoteRecord) (*model.RematchVote, error) {
+func rematchVoteRecordToDomain(m *RematchVoteRecord) (*model.RematchVote, error) {
 	if m == nil {
 		return nil, nil
 	}
@@ -348,7 +348,7 @@ func RematchVoteRecordToDomain(m *RematchVoteRecord) (*model.RematchVote, error)
 	}, nil
 }
 
-func RoundLogRecordFromDomain(r *model.RoundLog) (*RoundLogRecord, error) {
+func roundLogRecordFromDomain(r *model.RoundLog) (*RoundLogRecord, error) {
 	if r == nil {
 		return nil, nil
 	}
@@ -369,7 +369,7 @@ func RoundLogRecordFromDomain(r *model.RoundLog) (*RoundLogRecord, error) {
 	}, nil
 }
 
-func RoundLogRecordToDomain(m *RoundLogRecord) (*model.RoundLog, error) {
+func roundLogRecordToDomain(m *RoundLogRecord) (*model.RoundLog, error) {
 	if m == nil {
 		return nil, nil
 	}

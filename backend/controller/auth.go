@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
-	"os"
 	"time"
 
 	"blackjack/backend/dto"
@@ -150,7 +149,7 @@ func clearSessionCookie(c echo.Context) {
 }
 
 func cookieSecure() bool {
-	return os.Getenv("COOKIE_SECURE") != "0"
+	return true
 }
 
 func setCSRFCookie(c echo.Context, token string, maxAge int) {

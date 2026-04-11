@@ -22,7 +22,6 @@ import (
 
 var (
 	_ = websocket.ErrBadHandshake
-	_ = redis.NewClient(&redis.Options{})
 )
 
 func main() {
@@ -36,18 +35,43 @@ func main() {
 		log.Fatalf("database: %v", err)
 	}
 	store := gormrepo.New(gdb)
+	redisAddr := os.Getenv("REDIS_ADDR")
+	if redisAddr == "" {
+		redisAddr = "localhost:6379"
+	}
+	rdb := redis.NewClient(&redis.Options{Addr: redisAddr})
+	limiter := middleware.NewRedisTokenBucketLimiter(rdb, 20, 5.0)
 	authUC := usecase.NewAuthUsecase(store)
 
 	e := echo.New()
 	api := e.Group("/api")
+	api.Use(middleware.RequestIDMiddleware())
 	api.Use(middleware.AuthMiddleware(store))
+	api.Use(middleware.RateLimitMiddleware(limiter))
 	api.Use(middleware.CSRFMiddleware())
+	api.Use(middleware.AuditLogMiddleware())
 	controller.NewAuthController(authUC).Register(api)
 	roomUC := usecase.NewRoomUsecase(store)
-	roomController := controller.NewRoomController(roomUC)
+	roomController := controller.NewRoomController(roomUC, limiter)
 	roomController.Register(api)
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			roomIDs, err := roomUC.AutoStandDueSessions(context.Background())
+			if err != nil {
+				e.Logger.Errorf("auto-stand worker error: %v", err)
+				continue
+			}
+			for _, roomID := range roomIDs {
+				roomController.BroadcastRoomSync(context.Background(), roomID)
+			}
+		}
+	}()
 	ws := e.Group("/ws")
+	ws.Use(middleware.RequestIDMiddleware())
 	ws.Use(middleware.AuthMiddleware(store))
+	ws.Use(middleware.AuditLogMiddleware())
 	ws.GET("/rooms/:id", roomController.RoomWS)
 	e.GET("/health", func(c echo.Context) error {
 		ctx, cancel := context.WithTimeout(c.Request().Context(), 2*time.Second)

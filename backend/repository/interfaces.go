@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"time"
 
 	"blackjack/backend/model"
 )
@@ -19,6 +20,8 @@ type GameSessionRepository interface {
 	UpdateSessionIfVersion(ctx context.Context, session *model.GameSession, expectedVersion int64) (bool, error)
 	GetSession(ctx context.Context, id string) (*model.GameSession, error)
 	GetLatestSessionByRoomID(ctx context.Context, roomID string) (*model.GameSession, error)
+	ListSessionsByStatusAndDeadlineBefore(ctx context.Context, status model.SessionStatus, deadline time.Time) ([]*model.GameSession, error)
+	ListSessionsByStatus(ctx context.Context, status model.SessionStatus) ([]*model.GameSession, error)
 }
 
 type RoomPlayerRepository interface {

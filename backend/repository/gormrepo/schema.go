@@ -1,8 +1,10 @@
-package db
+package gormrepo
 
 import (
 	"time"
 )
+
+// GORM table models only; domain entities live in model.
 
 type RoomRecord struct {
 	ID               string    `gorm:"type:uuid;primaryKey"`
@@ -27,19 +29,19 @@ type RoomPlayerRecord struct {
 func (RoomPlayerRecord) TableName() string { return "room_players" }
 
 type GameSessionRecord struct {
-	ID                string     `gorm:"type:uuid;primaryKey"`
-	RoomID            string     `gorm:"type:uuid;not null;index;column:room_id;uniqueIndex:ux_room_round"`
-	RoundNo           int        `gorm:"not null;column:round_no;uniqueIndex:ux_room_round"`
-	Status            string     `gorm:"type:varchar(32);not null"`
-	Version           int64      `gorm:"not null;default:1"`
-	Deck              []byte     `gorm:"type:jsonb;not null"`
-	DrawIndex         int        `gorm:"not null;column:draw_index"`
-	TurnSeat          int        `gorm:"not null;column:turn_seat"`
-	TurnDeadlineAt    *time.Time `gorm:"column:turn_deadline_at"`
-	ResultSnapshot    []byte     `gorm:"type:jsonb;column:result_snapshot"`
-	RematchDeadlineAt *time.Time `gorm:"column:rematch_deadline_at"`
-	CreatedAt         time.Time  `gorm:"not null;column:created_at"`
-	UpdatedAt         time.Time  `gorm:"not null;column:updated_at"`
+	ID                  string     `gorm:"type:uuid;primaryKey"`
+	RoomID              string     `gorm:"type:uuid;not null;index;column:room_id;uniqueIndex:ux_room_round"`
+	RoundNo             int        `gorm:"not null;column:round_no;uniqueIndex:ux_room_round"`
+	Status              string     `gorm:"type:varchar(32);not null"`
+	Version             int64      `gorm:"not null;default:1"`
+	Deck                []byte     `gorm:"type:jsonb;not null"`
+	DrawIndex           int        `gorm:"not null;column:draw_index"`
+	TurnSeat            int        `gorm:"not null;column:turn_seat"`
+	TurnDeadlineAt      *time.Time `gorm:"column:turn_deadline_at"`
+	ResultSnapshot      []byte     `gorm:"type:jsonb;column:result_snapshot"`
+	RematchDeadlineAt   *time.Time `gorm:"column:rematch_deadline_at"`
+	CreatedAt           time.Time  `gorm:"not null;column:created_at"`
+	UpdatedAt           time.Time  `gorm:"not null;column:updated_at"`
 }
 
 func (GameSessionRecord) TableName() string { return "game_sessions" }

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"time"
 
-	"blackjack/backend/db"
 	"blackjack/backend/model"
 	"blackjack/backend/repository"
 
@@ -44,7 +43,7 @@ func mapErr(err error) error {
 var _ repository.Store = (*Store)(nil)
 
 func (s *Store) CreateUser(ctx context.Context, user *model.User) error {
-	row, err := db.UserRecordFromDomain(user)
+	row, err := userRecordFromDomain(user)
 	if err != nil {
 		return err
 	}
@@ -55,7 +54,7 @@ func (s *Store) CreateUser(ctx context.Context, user *model.User) error {
 }
 
 func (s *Store) CreateRoom(ctx context.Context, room *model.Room) error {
-	row, err := db.RoomRecordFromDomain(room)
+	row, err := roomRecordFromDomain(room)
 	if err != nil {
 		return err
 	}
@@ -63,7 +62,7 @@ func (s *Store) CreateRoom(ctx context.Context, room *model.Room) error {
 }
 
 func (s *Store) UpdateRoom(ctx context.Context, room *model.Room) error {
-	row, err := db.RoomRecordFromDomain(room)
+	row, err := roomRecordFromDomain(room)
 	if err != nil {
 		return err
 	}
@@ -71,12 +70,12 @@ func (s *Store) UpdateRoom(ctx context.Context, room *model.Room) error {
 }
 
 func (s *Store) UpdateSessionIfVersion(ctx context.Context, session *model.GameSession, expectedVersion int64) (bool, error) {
-	row, err := db.GameSessionRecordFromDomain(session)
+	row, err := gameSessionRecordFromDomain(session)
 	if err != nil {
 		return false, err
 	}
 	tx := s.db.WithContext(ctx).
-		Model(&db.GameSessionRecord{}).
+		Model(&GameSessionRecord{}).
 		Where("id = ? AND version = ?", row.ID, expectedVersion).
 		Updates(map[string]any{
 			"status":              row.Status,
@@ -96,15 +95,15 @@ func (s *Store) UpdateSessionIfVersion(ctx context.Context, session *model.GameS
 }
 
 func (s *Store) GetRoom(ctx context.Context, id string) (*model.Room, error) {
-	var rec db.RoomRecord
+	var rec RoomRecord
 	if err := s.db.WithContext(ctx).First(&rec, "id = ?", id).Error; err != nil {
 		return nil, mapErr(err)
 	}
-	return db.RoomRecordToDomain(&rec)
+	return roomRecordToDomain(&rec)
 }
 
 func (s *Store) ListRoomsByUserID(ctx context.Context, userID string) ([]*model.Room, error) {
-	var rows []db.RoomRecord
+	var rows []RoomRecord
 	if err := s.db.WithContext(ctx).
 		Where("host_user_id = ?", userID).
 		Order("created_at DESC").
@@ -113,7 +112,7 @@ func (s *Store) ListRoomsByUserID(ctx context.Context, userID string) ([]*model.
 	}
 	out := make([]*model.Room, 0, len(rows))
 	for i := range rows {
-		item, err := db.RoomRecordToDomain(&rows[i])
+		item, err := roomRecordToDomain(&rows[i])
 		if err != nil {
 			return nil, err
 		}
@@ -123,7 +122,7 @@ func (s *Store) ListRoomsByUserID(ctx context.Context, userID string) ([]*model.
 }
 
 func (s *Store) CreateSession(ctx context.Context, session *model.GameSession) error {
-	row, err := db.GameSessionRecordFromDomain(session)
+	row, err := gameSessionRecordFromDomain(session)
 	if err != nil {
 		return err
 	}
@@ -131,7 +130,7 @@ func (s *Store) CreateSession(ctx context.Context, session *model.GameSession) e
 }
 
 func (s *Store) UpdateSession(ctx context.Context, session *model.GameSession) error {
-	row, err := db.GameSessionRecordFromDomain(session)
+	row, err := gameSessionRecordFromDomain(session)
 	if err != nil {
 		return err
 	}
@@ -139,15 +138,15 @@ func (s *Store) UpdateSession(ctx context.Context, session *model.GameSession) e
 }
 
 func (s *Store) GetSession(ctx context.Context, id string) (*model.GameSession, error) {
-	var rec db.GameSessionRecord
+	var rec GameSessionRecord
 	if err := s.db.WithContext(ctx).First(&rec, "id = ?", id).Error; err != nil {
 		return nil, mapErr(err)
 	}
-	return db.GameSessionRecordToDomain(&rec)
+	return gameSessionRecordToDomain(&rec)
 }
 
 func (s *Store) GetLatestSessionByRoomID(ctx context.Context, roomID string) (*model.GameSession, error) {
-	var rec db.GameSessionRecord
+	var rec GameSessionRecord
 	err := s.db.WithContext(ctx).
 		Where("room_id = ?", roomID).
 		Order("created_at DESC").
@@ -155,11 +154,51 @@ func (s *Store) GetLatestSessionByRoomID(ctx context.Context, roomID string) (*m
 	if err != nil {
 		return nil, mapErr(err)
 	}
-	return db.GameSessionRecordToDomain(&rec)
+	return gameSessionRecordToDomain(&rec)
+}
+
+func (s *Store) ListSessionsByStatusAndDeadlineBefore(ctx context.Context, status model.SessionStatus, deadline time.Time) ([]*model.GameSession, error) {
+	var rows []GameSessionRecord
+	err := s.db.WithContext(ctx).
+		Where("status = ? AND turn_deadline_at IS NOT NULL AND turn_deadline_at <= ?", string(status), deadline).
+		Order("turn_deadline_at ASC").
+		Find(&rows).Error
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	out := make([]*model.GameSession, 0, len(rows))
+	for i := range rows {
+		item, err := gameSessionRecordToDomain(&rows[i])
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, nil
+}
+
+func (s *Store) ListSessionsByStatus(ctx context.Context, status model.SessionStatus) ([]*model.GameSession, error) {
+	var rows []GameSessionRecord
+	err := s.db.WithContext(ctx).
+		Where("status = ?", string(status)).
+		Order("updated_at ASC").
+		Find(&rows).Error
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	out := make([]*model.GameSession, 0, len(rows))
+	for i := range rows {
+		item, err := gameSessionRecordToDomain(&rows[i])
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, nil
 }
 
 func (s *Store) CreateRoomPlayer(ctx context.Context, p *model.RoomPlayer) error {
-	row, err := db.RoomPlayerRecordFromDomain(p)
+	row, err := roomPlayerRecordFromDomain(p)
 	if err != nil {
 		return err
 	}
@@ -167,7 +206,7 @@ func (s *Store) CreateRoomPlayer(ctx context.Context, p *model.RoomPlayer) error
 }
 
 func (s *Store) UpdateRoomPlayer(ctx context.Context, p *model.RoomPlayer) error {
-	row, err := db.RoomPlayerRecordFromDomain(p)
+	row, err := roomPlayerRecordFromDomain(p)
 	if err != nil {
 		return err
 	}
@@ -175,24 +214,24 @@ func (s *Store) UpdateRoomPlayer(ctx context.Context, p *model.RoomPlayer) error
 }
 
 func (s *Store) GetRoomPlayer(ctx context.Context, roomID, userID string) (*model.RoomPlayer, error) {
-	var rec db.RoomPlayerRecord
+	var rec RoomPlayerRecord
 	err := s.db.WithContext(ctx).
 		Where("room_id = ? AND user_id = ?", roomID, userID).
 		First(&rec).Error
 	if err != nil {
 		return nil, mapErr(err)
 	}
-	return db.RoomPlayerRecordToDomain(&rec)
+	return roomPlayerRecordToDomain(&rec)
 }
 
 func (s *Store) ListRoomPlayersByRoomID(ctx context.Context, roomID string) ([]*model.RoomPlayer, error) {
-	var rows []db.RoomPlayerRecord
+	var rows []RoomPlayerRecord
 	if err := s.db.WithContext(ctx).Where("room_id = ?", roomID).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := make([]*model.RoomPlayer, 0, len(rows))
 	for i := range rows {
-		d, err := db.RoomPlayerRecordToDomain(&rows[i])
+		d, err := roomPlayerRecordToDomain(&rows[i])
 		if err != nil {
 			return nil, err
 		}
@@ -202,7 +241,7 @@ func (s *Store) ListRoomPlayersByRoomID(ctx context.Context, roomID string) ([]*
 }
 
 func (s *Store) CreatePlayerState(ctx context.Context, p *model.PlayerState) error {
-	row, err := db.PlayerStateRecordFromDomain(p)
+	row, err := playerStateRecordFromDomain(p)
 	if err != nil {
 		return err
 	}
@@ -210,7 +249,7 @@ func (s *Store) CreatePlayerState(ctx context.Context, p *model.PlayerState) err
 }
 
 func (s *Store) UpdatePlayerState(ctx context.Context, p *model.PlayerState) error {
-	row, err := db.PlayerStateRecordFromDomain(p)
+	row, err := playerStateRecordFromDomain(p)
 	if err != nil {
 		return err
 	}
@@ -218,24 +257,24 @@ func (s *Store) UpdatePlayerState(ctx context.Context, p *model.PlayerState) err
 }
 
 func (s *Store) GetPlayerState(ctx context.Context, sessionID, userID string) (*model.PlayerState, error) {
-	var rec db.PlayerStateRecord
+	var rec PlayerStateRecord
 	err := s.db.WithContext(ctx).
 		Where("session_id = ? AND user_id = ?", sessionID, userID).
 		First(&rec).Error
 	if err != nil {
 		return nil, mapErr(err)
 	}
-	return db.PlayerStateRecordToDomain(&rec)
+	return playerStateRecordToDomain(&rec)
 }
 
 func (s *Store) ListPlayerStatesBySessionID(ctx context.Context, sessionID string) ([]*model.PlayerState, error) {
-	var rows []db.PlayerStateRecord
+	var rows []PlayerStateRecord
 	if err := s.db.WithContext(ctx).Where("session_id = ?", sessionID).Order("seat_no ASC").Find(&rows).Error; err != nil {
 		return nil, mapErr(err)
 	}
 	out := make([]*model.PlayerState, 0, len(rows))
 	for i := range rows {
-		item, err := db.PlayerStateRecordToDomain(&rows[i])
+		item, err := playerStateRecordToDomain(&rows[i])
 		if err != nil {
 			return nil, err
 		}
@@ -245,7 +284,7 @@ func (s *Store) ListPlayerStatesBySessionID(ctx context.Context, sessionID strin
 }
 
 func (s *Store) CreateDealerState(ctx context.Context, d *model.DealerState) error {
-	row, err := db.DealerStateRecordFromDomain(d)
+	row, err := dealerStateRecordFromDomain(d)
 	if err != nil {
 		return err
 	}
@@ -253,7 +292,7 @@ func (s *Store) CreateDealerState(ctx context.Context, d *model.DealerState) err
 }
 
 func (s *Store) UpdateDealerState(ctx context.Context, d *model.DealerState) error {
-	row, err := db.DealerStateRecordFromDomain(d)
+	row, err := dealerStateRecordFromDomain(d)
 	if err != nil {
 		return err
 	}
@@ -261,31 +300,31 @@ func (s *Store) UpdateDealerState(ctx context.Context, d *model.DealerState) err
 }
 
 func (s *Store) GetDealerState(ctx context.Context, sessionID string) (*model.DealerState, error) {
-	var rec db.DealerStateRecord
+	var rec DealerStateRecord
 	if err := s.db.WithContext(ctx).First(&rec, "session_id = ?", sessionID).Error; err != nil {
 		return nil, mapErr(err)
 	}
-	return db.DealerStateRecordToDomain(&rec)
+	return dealerStateRecordToDomain(&rec)
 }
 
 func (s *Store) GetUserByUsername(ctx context.Context, username string) (*model.User, error) {
-	var rec db.UserRecord
+	var rec UserRecord
 	if err := s.db.WithContext(ctx).Where("username = ?", username).First(&rec).Error; err != nil {
 		return nil, mapErr(err)
 	}
-	return db.UserRecordToDomain(&rec)
+	return userRecordToDomain(&rec)
 }
 
 func (s *Store) GetUserByID(ctx context.Context, userID string) (*model.User, error) {
-	var rec db.UserRecord
+	var rec UserRecord
 	if err := s.db.WithContext(ctx).First(&rec, "id = ?", userID).Error; err != nil {
 		return nil, mapErr(err)
 	}
-	return db.UserRecordToDomain(&rec)
+	return userRecordToDomain(&rec)
 }
 
 func (s *Store) UpsertSession(ctx context.Context, session *model.Session) error {
-	row, err := db.SessionRecordFromDomain(session)
+	row, err := authSessionRecordFromDomain(session)
 	if err != nil {
 		return err
 	}
@@ -293,25 +332,25 @@ func (s *Store) UpsertSession(ctx context.Context, session *model.Session) error
 }
 
 func (s *Store) GetAuthSession(ctx context.Context, sessionID string) (*model.Session, error) {
-	var rec db.SessionRecord
+	var rec SessionRecord
 	if err := s.db.WithContext(ctx).First(&rec, "id = ?", sessionID).Error; err != nil {
 		return nil, mapErr(err)
 	}
-	return db.SessionRecordToDomain(&rec)
+	return authSessionRecordToDomain(&rec)
 }
 
 func (s *Store) DeleteSession(ctx context.Context, sessionID string) error {
-	return s.db.WithContext(ctx).Delete(&db.SessionRecord{}, "id = ?", sessionID).Error
+	return s.db.WithContext(ctx).Delete(&SessionRecord{}, "id = ?", sessionID).Error
 }
 
 func (s *Store) DeleteExpiredSessions(ctx context.Context) error {
 	return s.db.WithContext(ctx).
-		Delete(&db.SessionRecord{}, "expires_at <= ?", time.Now().UTC()).
+		Delete(&SessionRecord{}, "expires_at <= ?", time.Now().UTC()).
 		Error
 }
 
 func (s *Store) CreateActionLog(ctx context.Context, actionLog *model.ActionLog) error {
-	row, err := db.ActionLogRecordFromDomain(actionLog)
+	row, err := actionLogRecordFromDomain(actionLog)
 	if err != nil {
 		return err
 	}
@@ -319,18 +358,18 @@ func (s *Store) CreateActionLog(ctx context.Context, actionLog *model.ActionLog)
 }
 
 func (s *Store) GetActionLogByActionID(ctx context.Context, sessionID, actorUserID, actionID string) (*model.ActionLog, error) {
-	var rec db.ActionLogRecord
+	var rec ActionLogRecord
 	err := s.db.WithContext(ctx).
 		Where("session_id = ? AND actor_user_id = ? AND action_id = ?", sessionID, actorUserID, actionID).
 		First(&rec).Error
 	if err != nil {
 		return nil, mapErr(err)
 	}
-	return db.ActionLogRecordToDomain(&rec)
+	return actionLogRecordToDomain(&rec)
 }
 
 func (s *Store) UpsertRematchVote(ctx context.Context, vote *model.RematchVote) error {
-	row, err := db.RematchVoteRecordFromDomain(vote)
+	row, err := rematchVoteRecordFromDomain(vote)
 	if err != nil {
 		return err
 	}
@@ -344,13 +383,13 @@ func (s *Store) UpsertRematchVote(ctx context.Context, vote *model.RematchVote) 
 }
 
 func (s *Store) ListRematchVotes(ctx context.Context, sessionID string) ([]*model.RematchVote, error) {
-	var rows []db.RematchVoteRecord
+	var rows []RematchVoteRecord
 	if err := s.db.WithContext(ctx).Where("session_id = ?", sessionID).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := make([]*model.RematchVote, 0, len(rows))
 	for i := range rows {
-		v, err := db.RematchVoteRecordToDomain(&rows[i])
+		v, err := rematchVoteRecordToDomain(&rows[i])
 		if err != nil {
 			return nil, err
 		}
@@ -360,7 +399,7 @@ func (s *Store) ListRematchVotes(ctx context.Context, sessionID string) ([]*mode
 }
 
 func (s *Store) CreateRoundLog(ctx context.Context, logItem *model.RoundLog) error {
-	row, err := db.RoundLogRecordFromDomain(logItem)
+	row, err := roundLogRecordFromDomain(logItem)
 	if err != nil {
 		return err
 	}
@@ -368,18 +407,18 @@ func (s *Store) CreateRoundLog(ctx context.Context, logItem *model.RoundLog) err
 }
 
 func (s *Store) GetRoundLog(ctx context.Context, sessionID string, roundNo int) (*model.RoundLog, error) {
-	var rec db.RoundLogRecord
+	var rec RoundLogRecord
 	err := s.db.WithContext(ctx).
 		Where("session_id = ? AND round_no = ?", sessionID, roundNo).
 		First(&rec).Error
 	if err != nil {
 		return nil, mapErr(err)
 	}
-	return db.RoundLogRecordToDomain(&rec)
+	return roundLogRecordToDomain(&rec)
 }
 
 func (s *Store) ListRoundLogsByRoomID(ctx context.Context, roomID string) ([]*model.RoundLog, error) {
-	var rows []db.RoundLogRecord
+	var rows []RoundLogRecord
 	err := s.db.WithContext(ctx).
 		Table("round_logs").
 		Joins("JOIN game_sessions ON game_sessions.id = round_logs.session_id").
@@ -391,7 +430,7 @@ func (s *Store) ListRoundLogsByRoomID(ctx context.Context, roomID string) ([]*mo
 	}
 	out := make([]*model.RoundLog, 0, len(rows))
 	for i := range rows {
-		item, err := db.RoundLogRecordToDomain(&rows[i])
+		item, err := roundLogRecordToDomain(&rows[i])
 		if err != nil {
 			return nil, err
 		}
