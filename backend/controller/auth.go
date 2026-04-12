@@ -22,10 +22,12 @@ type loginRequest struct {
 	Password string `json:"password"`
 }
 
+// NewAuthController は認証 API ハンドラを生成する。
 func NewAuthController(auth usecase.AuthUsecase) *AuthController {
 	return &AuthController{auth: auth}
 }
 
+// Register は /api 配下に認証ルートを登録する。
 func (a *AuthController) Register(g *echo.Group) {
 	g.POST("/auth/signup", a.Signup)
 	g.POST("/auth/login", a.Login)
@@ -33,6 +35,7 @@ func (a *AuthController) Register(g *echo.Group) {
 	g.GET("/me", a.Me)
 }
 
+// Signup は新規登録し、セッション・CSRF Cookie を返す。
 func (a *AuthController) Signup(c echo.Context) error {
 	var req loginRequest
 	if err := c.Bind(&req); err != nil || req.Username == "" || req.Password == "" {
@@ -64,6 +67,7 @@ func (a *AuthController) Signup(c echo.Context) error {
 	}))
 }
 
+// Login はログインし、セッション・CSRF Cookie を返す。
 func (a *AuthController) Login(c echo.Context) error {
 	var req loginRequest
 	if err := c.Bind(&req); err != nil || req.Username == "" || req.Password == "" {
@@ -91,6 +95,7 @@ func (a *AuthController) Login(c echo.Context) error {
 	}))
 }
 
+// Logout はサーバー側セッション削除と Cookie クリアを行う。
 func (a *AuthController) Logout(c echo.Context) error {
 	sessionID, _ := readSessionCookie(c)
 	if err := a.auth.Logout(c.Request().Context(), sessionID); err != nil {
@@ -101,6 +106,7 @@ func (a *AuthController) Logout(c echo.Context) error {
 	return c.JSON(http.StatusOK, dto.OK(map[string]any{}))
 }
 
+// Me は Cookie セッションから現在ユーザーを返す。
 func (a *AuthController) Me(c echo.Context) error {
 	sessionID, ok := readSessionCookie(c)
 	if !ok {
@@ -116,6 +122,7 @@ func (a *AuthController) Me(c echo.Context) error {
 	}))
 }
 
+// readSessionCookie は session_id Cookie を読む。
 func readSessionCookie(c echo.Context) (string, bool) {
 	ck, err := c.Cookie("session_id")
 	if err != nil || ck.Value == "" {
@@ -124,6 +131,7 @@ func readSessionCookie(c echo.Context) (string, bool) {
 	return ck.Value, true
 }
 
+// setSessionCookie は HttpOnly セッション Cookie をセットする。
 func setSessionCookie(c echo.Context, token string, maxAge int) {
 	c.SetCookie(&http.Cookie{
 		Name:     "session_id",
@@ -136,6 +144,7 @@ func setSessionCookie(c echo.Context, token string, maxAge int) {
 	})
 }
 
+// clearSessionCookie はセッション Cookie を消す。
 func clearSessionCookie(c echo.Context) {
 	c.SetCookie(&http.Cookie{
 		Name:     "session_id",
@@ -148,10 +157,12 @@ func clearSessionCookie(c echo.Context) {
 	})
 }
 
+// cookieSecure は Secure 属性（本番想定で true）。
 func cookieSecure() bool {
 	return true
 }
 
+// setCSRFCookie は Double Submit 用 csrf_token をセットする。
 func setCSRFCookie(c echo.Context, token string, maxAge int) {
 	c.SetCookie(&http.Cookie{
 		Name:     "csrf_token",
@@ -164,6 +175,7 @@ func setCSRFCookie(c echo.Context, token string, maxAge int) {
 	})
 }
 
+// clearCSRFCookie は CSRF Cookie を消す。
 func clearCSRFCookie(c echo.Context) {
 	c.SetCookie(&http.Cookie{
 		Name:     "csrf_token",
@@ -176,6 +188,7 @@ func clearCSRFCookie(c echo.Context) {
 	})
 }
 
+// generateCSRFToken は CSRF トークン文字列を生成する。
 func generateCSRFToken() (string, error) {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {

@@ -38,15 +38,16 @@ type authResponse struct {
 	user      *model.User
 }
 
-func (r authResponse) SessionToken() string { return r.token }
-func (r authResponse) ExpiresAt() time.Time { return r.expiresAt }
-func (r authResponse) User() *model.User    { return r.user }
+func (r authResponse) SessionToken() string { return r.token }     // クッキー用セッショントークン
+func (r authResponse) ExpiresAt() time.Time { return r.expiresAt } // セッション失効時刻
+func (r authResponse) User() *model.User    { return r.user }      // ログイン済みユーザー
 
 type authService struct {
 	store      repository.Store
 	sessionTTL time.Duration
 }
 
+// NewAuthUsecase は認証ユースケース（サインアップ・ログイン・セッション）を組み立てる。
 func NewAuthUsecase(store repository.Store) AuthUsecase {
 	return &authService{
 		store:      store,
@@ -54,6 +55,7 @@ func NewAuthUsecase(store repository.Store) AuthUsecase {
 	}
 }
 
+// Signup はユーザーを作成し、DB セッションを発行してログイン状態にする。
 func (u *authService) Signup(ctx context.Context, username, password string) (AuthResponse, error) {
 	username = strings.TrimSpace(username)
 	if len(username) < 3 || len(username) > 100 || len(password) < 8 {
@@ -100,6 +102,7 @@ func (u *authService) Signup(ctx context.Context, username, password string) (Au
 	return authResponse{token: token, expiresAt: expiresAt, user: user}, nil
 }
 
+// Login は資格情報を検証し、新しいサーバーサイドセッションを発行する。
 func (u *authService) Login(ctx context.Context, username, password string) (AuthResponse, error) {
 	user, err := u.store.GetUserByUsername(ctx, username)
 	if err != nil {
@@ -126,6 +129,7 @@ func (u *authService) Login(ctx context.Context, username, password string) (Aut
 	return authResponse{token: token, expiresAt: expiresAt, user: user}, nil
 }
 
+// Logout はセッションを DB から無効化する（クッキー削除は Controller 側）。
 func (u *authService) Logout(ctx context.Context, sessionID string) error {
 	if sessionID == "" {
 		return nil
@@ -133,6 +137,7 @@ func (u *authService) Logout(ctx context.Context, sessionID string) error {
 	return u.store.DeleteSession(ctx, sessionID)
 }
 
+// Me は有効なセッションに紐づくユーザーを返す。
 func (u *authService) Me(ctx context.Context, sessionID string) (*model.User, error) {
 	if sessionID == "" {
 		return nil, ErrUnauthorized
@@ -152,6 +157,7 @@ func (u *authService) Me(ctx context.Context, sessionID string) (*model.User, er
 	return user, nil
 }
 
+// generateSessionID は推測困難なセッション ID を生成する。
 func generateSessionID() (string, error) {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {

@@ -10,7 +10,7 @@ import (
 	"blackjack/backend/controller"
 	"blackjack/backend/db"
 	"blackjack/backend/middleware"
-	"blackjack/backend/repository/gormrepo"
+	"blackjack/backend/repository"
 	"blackjack/backend/usecase"
 
 	_ "github.com/ethanefung/blackjack"
@@ -27,14 +27,14 @@ var (
 func main() {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		log.Fatal("DATABASE_URL is required (see .env.example in repo root)")
+		log.Fatal("DATABASE_URL is required (set in .env or export in shell)")
 	}
 
 	gdb, err := db.Open(dsn)
 	if err != nil {
 		log.Fatalf("database: %v", err)
 	}
-	store := gormrepo.New(gdb)
+	store := repository.NewPostgreSQLStore(gdb)
 	redisAddr := os.Getenv("REDIS_ADDR")
 	if redisAddr == "" {
 		redisAddr = "localhost:6379"

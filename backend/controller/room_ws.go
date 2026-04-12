@@ -34,7 +34,7 @@ var wsUpgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
-// RoomWS handles websocket lifecycle for one room
+// RoomWS は卓用 WebSocket（受信ループ・レート制限・多重接続の最新のみ有効）。
 func (r *RoomController) RoomWS(c echo.Context) error {
 	userID, _ := c.Get("user_id").(string)
 	roomID := c.Param("id")
@@ -153,7 +153,7 @@ func (r *RoomController) RoomWS(c echo.Context) error {
 	return nil
 }
 
-// broadcastRoomState sends ROOM_STATE_SYNC to active room connections
+// broadcastRoomState は卓の全接続へユーザー別に ROOM_STATE_SYNC を送る。
 func (r *RoomController) broadcastRoomState(ctx context.Context, roomID, actorUserID, eventType string) {
 	// room参加中の全接続へ、ユーザーごとの公開範囲で state を組み立てて送信する
 	snapshot := globalRoomHub.snapshot(roomID)
@@ -177,12 +177,12 @@ func (r *RoomController) broadcastRoomState(ctx context.Context, roomID, actorUs
 	}
 }
 
-// BroadcastRoomSync is used by background workers after commits.
+// BroadcastRoomSync はバックグラウンド処理後に同期イベントを送る。
 func (r *RoomController) BroadcastRoomSync(ctx context.Context, roomID string) {
 	r.broadcastRoomState(ctx, roomID, "", dto.WSEventRoomSync)
 }
 
-// writeWS serializes write calls per websocket connection.
+// writeWS はコネクション単位で書き込みを直列化する。
 func writeWS(conn *websocket.Conn, meta wsConnMeta, payload []byte) error {
 	meta.writeMu.Lock()
 	defer meta.writeMu.Unlock()
@@ -190,7 +190,7 @@ func writeWS(conn *websocket.Conn, meta wsConnMeta, payload []byte) error {
 	return conn.WriteMessage(websocket.TextMessage, payload)
 }
 
-// sendWSError emits fixed ERROR event payload.
+// sendWSError は WS 用の ERROR ペイロードを送る。
 func sendWSError(conn *websocket.Conn, meta wsConnMeta, code, message string) {
 	// エラー契約は { type: "ERROR", error: { code, message } } で固定
 	b, err := json.Marshal(dto.WSErrorEvent{
@@ -206,7 +206,7 @@ func sendWSError(conn *websocket.Conn, meta wsConnMeta, code, message string) {
 	_ = writeWS(conn, meta, b)
 }
 
-// sendWSPong responds to PING heartbeat.
+// sendWSPong は PING に対する PONG。
 func sendWSPong(conn *websocket.Conn, meta wsConnMeta) {
 	b, err := json.Marshal(map[string]string{"type": dto.WSEventPong})
 	if err != nil {
@@ -215,7 +215,7 @@ func sendWSPong(conn *websocket.Conn, meta wsConnMeta) {
 	_ = writeWS(conn, meta, b)
 }
 
-// mapWSError maps domain/usecase errors to WS error codes
+// mapWSError はドメインエラーを WS の code/message に変換する。
 func mapWSError(err error) (string, string) {
 	switch err {
 	case usecase.ErrUnauthorizedUser:
@@ -239,7 +239,7 @@ func mapWSError(err error) (string, string) {
 	}
 }
 
-// buildRoomStateSyncDTO builds per-user visible state payload
+// buildRoomStateSyncDTO は閲覧者ごとの手札公開範囲を反映した同期ペイロードを組み立てる。
 func buildRoomStateSyncDTO(s *usecase.RoomState, userID string) dto.RoomStateSyncPayload {
 	out := dto.RoomStateSyncPayload{
 		Room: dto.RoomJSON{ID: s.Room.ID, Status: string(s.Room.Status)},
@@ -326,7 +326,7 @@ func buildRoomStateSyncDTO(s *usecase.RoomState, userID string) dto.RoomStateSyn
 	return out
 }
 
-// add registers connection and returns older same-user connection
+// add は卓に接続を登録し、同一ユーザーの旧接続があれば返す（切断用）。
 func (h *roomHub) add(roomID string, conn *websocket.Conn, meta wsConnMeta) *websocket.Conn {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -343,7 +343,7 @@ func (h *roomHub) add(roomID string, conn *websocket.Conn, meta wsConnMeta) *web
 	return old
 }
 
-// remove unregisters a connection from room hub
+// remove は卓ハブから接続を外す。
 func (h *roomHub) remove(roomID string, conn *websocket.Conn) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -361,7 +361,7 @@ func (h *roomHub) remove(roomID string, conn *websocket.Conn) {
 	}
 }
 
-// snapshot clones current connections for safe broadcast iteration
+// snapshot はブロードキャスト用に接続一覧のコピーを取る。
 func (h *roomHub) snapshot(roomID string) map[*websocket.Conn]wsConnMeta {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -372,14 +372,14 @@ func (h *roomHub) snapshot(roomID string) map[*websocket.Conn]wsConnMeta {
 	return out
 }
 
-// isLatest checks whether connection is latest for room+user
+// isLatest は当該接続が room+user の最新かどうか（切断時の DB 更新判定）。
 func (h *roomHub) isLatest(roomID, userID string, conn *websocket.Conn) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.latest[roomID+":"+userID] == conn
 }
 
-// logWSEvent writes structured audit log for each WS message
+// logWSEvent は WS メッセージごとの構造化監査ログを出す。
 func logWSEvent(c echo.Context, req dto.WSActionRequest, roomID, userID string, before, after int64, start time.Time, result, errorCode string) {
 	reqID := req.RequestID
 	if reqID == "" {

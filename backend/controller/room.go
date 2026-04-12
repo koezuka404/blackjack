@@ -18,10 +18,12 @@ type RoomController struct {
 	limiter middleware.RateLimiter
 }
 
+// NewRoomController はルーム API / WS 用コントローラを生成する。
 func NewRoomController(room usecase.RoomUsecase, limiter middleware.RateLimiter) *RoomController {
 	return &RoomController{room: room, limiter: limiter}
 }
 
+// Register は HTTP のルーム系ルートを登録する（HIT/STAND 等）。
 func (r *RoomController) Register(g *echo.Group) {
 	g.POST("/rooms", r.CreateRoom)
 	g.GET("/rooms", r.ListRooms)
@@ -34,6 +36,7 @@ func (r *RoomController) Register(g *echo.Group) {
 	g.POST("/rooms/:id/stand", r.Stand)
 }
 
+// CreateRoom は卓の作成。
 func (r *RoomController) CreateRoom(c echo.Context) error {
 	userID, _ := c.Get("user_id").(string)
 	room, err := r.room.CreateRoom(c.Request().Context(), userID)
@@ -52,6 +55,7 @@ func (r *RoomController) CreateRoom(c echo.Context) error {
 	}))
 }
 
+// JoinRoom はホストの卓参加。
 func (r *RoomController) JoinRoom(c echo.Context) error {
 	userID, _ := c.Get("user_id").(string)
 	roomID := c.Param("id")
@@ -82,6 +86,7 @@ func (r *RoomController) JoinRoom(c echo.Context) error {
 	}))
 }
 
+// LeaveRoom は卓からの離脱。
 func (r *RoomController) LeaveRoom(c echo.Context) error {
 	userID, _ := c.Get("user_id").(string)
 	roomID := c.Param("id")
@@ -110,6 +115,7 @@ func (r *RoomController) LeaveRoom(c echo.Context) error {
 	}))
 }
 
+// GetRoom は単体ルーム＋セッション概要の取得。
 func (r *RoomController) GetRoom(c echo.Context) error {
 	userID, _ := c.Get("user_id").(string)
 	roomID := c.Param("id")
@@ -144,6 +150,7 @@ func (r *RoomController) GetRoom(c echo.Context) error {
 	return c.JSON(http.StatusOK, dto.OK(data))
 }
 
+// ListRooms は自分がホストのルーム一覧。
 func (r *RoomController) ListRooms(c echo.Context) error {
 	userID, _ := c.Get("user_id").(string)
 	rooms, err := r.room.ListRooms(c.Request().Context(), userID)
@@ -164,6 +171,7 @@ func (r *RoomController) ListRooms(c echo.Context) error {
 	return c.JSON(http.StatusOK, dto.OK(dto.ListRoomsData{Rooms: items}))
 }
 
+// GetRoomHistory は round_logs 由来の履歴取得。
 func (r *RoomController) GetRoomHistory(c echo.Context) error {
 	userID, _ := c.Get("user_id").(string)
 	roomID := c.Param("id")
@@ -192,6 +200,7 @@ func (r *RoomController) GetRoomHistory(c echo.Context) error {
 	}))
 }
 
+// StartRoom はゲーム開始（配札）。
 func (r *RoomController) StartRoom(c echo.Context) error {
 	userID, _ := c.Get("user_id").(string)
 	roomID := c.Param("id")
@@ -225,14 +234,17 @@ func (r *RoomController) StartRoom(c echo.Context) error {
 	}))
 }
 
+// Hit は HTTP 経由のヒット（WS と二重になる場合はクライアント方針次第）。
 func (r *RoomController) Hit(c echo.Context) error {
 	return r.turnAction(c, true)
 }
 
+// Stand は HTTP 経由のスタンド。
 func (r *RoomController) Stand(c echo.Context) error {
 	return r.turnAction(c, false)
 }
 
+// RematchVote は HTTP 経由の再戦投票（仕様上は WS が主）。
 func (r *RoomController) RematchVote(c echo.Context) error {
 	userID, _ := c.Get("user_id").(string)
 	roomID := c.Param("id")
@@ -274,6 +286,7 @@ func (r *RoomController) RematchVote(c echo.Context) error {
 	}))
 }
 
+// turnAction は Hit/Stand 共通の HTTP 処理とブロードキャスト。
 func (r *RoomController) turnAction(c echo.Context, hit bool) error {
 	userID, _ := c.Get("user_id").(string)
 	roomID := c.Param("id")

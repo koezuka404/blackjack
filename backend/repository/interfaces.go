@@ -21,6 +21,8 @@ type GameSessionRepository interface {
 	GetSession(ctx context.Context, id string) (*model.GameSession, error)
 	GetLatestSessionByRoomID(ctx context.Context, roomID string) (*model.GameSession, error)
 	ListSessionsByStatusAndDeadlineBefore(ctx context.Context, status model.SessionStatus, deadline time.Time) ([]*model.GameSession, error)
+	// ListResettingSessionsDueBy returns RESETTING sessions whose rematch_deadline_at is set and <= deadline (Phase 2 / §9.3.11).
+	ListResettingSessionsDueBy(ctx context.Context, deadline time.Time) ([]*model.GameSession, error)
 	ListSessionsByStatus(ctx context.Context, status model.SessionStatus) ([]*model.GameSession, error)
 }
 

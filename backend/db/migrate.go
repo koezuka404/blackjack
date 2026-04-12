@@ -3,23 +3,23 @@ package db
 import (
 	"fmt"
 
-	"blackjack/backend/repository/gormrepo"
+	"blackjack/backend/repository"
 
 	"gorm.io/gorm"
 )
 
 func Migrate(gdb *gorm.DB) error {
 	if err := gdb.AutoMigrate(
-		&gormrepo.RoomRecord{},
-		&gormrepo.RoomPlayerRecord{},
-		&gormrepo.GameSessionRecord{},
-		&gormrepo.PlayerStateRecord{},
-		&gormrepo.DealerStateRecord{},
-		&gormrepo.ActionLogRecord{},
-		&gormrepo.RematchVoteRecord{},
-		&gormrepo.RoundLogRecord{},
-		&gormrepo.UserRecord{},
-		&gormrepo.SessionRecord{},
+		&repository.RoomRecord{},
+		&repository.RoomPlayerRecord{},
+		&repository.GameSessionRecord{},
+		&repository.PlayerStateRecord{},
+		&repository.DealerStateRecord{},
+		&repository.ActionLogRecord{},
+		&repository.RematchVoteRecord{},
+		&repository.RoundLogRecord{},
+		&repository.UserRecord{},
+		&repository.SessionRecord{},
 	); err != nil {
 		return err
 	}

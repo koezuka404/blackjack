@@ -1,4 +1,4 @@
-package gormrepo
+package repository
 
 import (
 	"encoding/json"
