@@ -2,11 +2,12 @@ package usecase
 
 import (
 	"context"
+	crand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"math/rand"
+	"math/big"
 	"strconv"
 	"time"
 
@@ -343,7 +344,7 @@ func (u *roomService) StartRoom(ctx context.Context, roomID, userID string) (*mo
 	if err != nil {
 		return nil, nil, err
 	}
-	sess.SetDeck(newShuffledDeck(now.UnixNano()))
+	sess.SetDeck(newShuffledDeck())
 	dealer, err := model.NewDealerState(sess.ID)
 	if err != nil {
 		return nil, nil, err
@@ -654,7 +655,7 @@ func (u *roomService) rematchUnanimousSuccessTx(ctx context.Context, tx reposito
 	if err != nil {
 		return nil, err
 	}
-	next.SetDeck(newShuffledDeck(now.UnixNano()))
+	next.SetDeck(newShuffledDeck())
 	dealer, err := model.NewDealerState(next.ID)
 	if err != nil {
 		return nil, err
@@ -1203,7 +1204,7 @@ func (u *roomService) advanceDealerOneStep(ctx context.Context, sessionID string
 }
 
 // newShuffledDeck は52枚の山札を生成してシャッフルする。
-func newShuffledDeck(seed int64) []model.StoredCard {
+func newShuffledDeck() []model.StoredCard {
 	suits := []string{"S", "H", "D", "C"}
 	ranks := []string{"A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"}
 	deck := make([]model.StoredCard, 0, 52)
@@ -1212,9 +1213,15 @@ func newShuffledDeck(seed int64) []model.StoredCard {
 			deck = append(deck, model.StoredCard{Rank: r, Suit: s})
 		}
 	}
-	r := rand.New(rand.NewSource(seed))
-	r.Shuffle(len(deck), func(i, j int) {
+	for i := len(deck) - 1; i > 0; i-- {
+		n, err := crand.Int(crand.Reader, big.NewInt(int64(i+1)))
+		if err != nil {
+			j := 0
+			deck[i], deck[j] = deck[j], deck[i]
+			continue
+		}
+		j := int(n.Int64())
 		deck[i], deck[j] = deck[j], deck[i]
-	})
+	}
 	return deck
 }

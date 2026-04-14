@@ -1,4 +1,5 @@
 # 実装仕様書 §18.3（PR 時の必須ジョブのうち、リポジトリ現状に合わせた最小セット）
+# gosec ジョブ: 静的セキュリティスキャン（仕様 18.5 の入口）
 name: CI
 
 on:
@@ -32,6 +33,22 @@ jobs:
 
       - name: go test
         run: go test ./...
+
+  gosec:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: gosec
+        run: go run github.com/securego/gosec/v2/cmd/gosec@v2.22.3 -fmt text ./...
 
   frontend:
     runs-on: ubuntu-latest

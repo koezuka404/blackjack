@@ -223,6 +223,7 @@ func (r *RoomController) StartRoom(c echo.Context) error {
 			return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
 		}
 	}
+	middleware.SetAuditSessionVersions(c, nil, &sess.Version)
 	r.broadcastRoomState(c.Request().Context(), room.ID, userID, "ROOM_STATE_SYNC")
 	return c.JSON(http.StatusOK, dto.OK(dto.StartRoomData{
 		Room: dto.RoomDetailJSON{
@@ -286,8 +287,10 @@ func (r *RoomController) RematchVote(c echo.Context) error {
 	if err := c.Bind(&req); err != nil || req.ActionID == "" || req.ExpectedVersion <= 0 {
 		return c.JSON(http.StatusBadRequest, dto.Fail("invalid_input", "agree, action_id, expected_version are required"))
 	}
+	c.Set(middleware.ActionIDContextKey, req.ActionID)
 	room, sess, err := r.room.VoteRematch(c.Request().Context(), roomID, userID, req.Agree, req.ExpectedVersion, req.ActionID)
 	if err != nil {
+		middleware.SetAuditSessionVersions(c, &req.ExpectedVersion, &req.ExpectedVersion)
 		switch err {
 		case usecase.ErrUnauthorizedUser:
 			return c.JSON(http.StatusUnauthorized, dto.Fail("unauthorized", "login required"))
@@ -307,6 +310,7 @@ func (r *RoomController) RematchVote(c echo.Context) error {
 			return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
 		}
 	}
+	middleware.SetAuditSessionVersions(c, &req.ExpectedVersion, &sess.Version)
 	r.broadcastRoomState(c.Request().Context(), room.ID, userID, "ROOM_STATE_SYNC")
 	return c.JSON(http.StatusOK, dto.OK(dto.TurnActionData{
 		Room: dto.RoomDetailJSON{
@@ -331,6 +335,7 @@ func (r *RoomController) turnAction(c echo.Context, hit bool) error {
 	if req.ActionID == "" {
 		return c.JSON(http.StatusBadRequest, dto.Fail("invalid_input", "action_id is required"))
 	}
+	c.Set(middleware.ActionIDContextKey, req.ActionID)
 	var (
 		room *model.Room
 		sess *model.GameSession
@@ -342,6 +347,7 @@ func (r *RoomController) turnAction(c echo.Context, hit bool) error {
 		room, sess, err = r.room.Stand(c.Request().Context(), roomID, userID, req.ExpectedVersion, req.ActionID)
 	}
 	if err != nil {
+		middleware.SetAuditSessionVersions(c, &req.ExpectedVersion, &req.ExpectedVersion)
 		switch err {
 		case usecase.ErrUnauthorizedUser:
 			return c.JSON(http.StatusUnauthorized, dto.Fail("unauthorized", "login required"))
@@ -361,6 +367,7 @@ func (r *RoomController) turnAction(c echo.Context, hit bool) error {
 			return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
 		}
 	}
+	middleware.SetAuditSessionVersions(c, &req.ExpectedVersion, &sess.Version)
 	r.broadcastRoomState(c.Request().Context(), room.ID, userID, "ROOM_STATE_SYNC")
 	return c.JSON(http.StatusOK, dto.OK(dto.TurnActionData{
 		Room: dto.RoomDetailJSON{
