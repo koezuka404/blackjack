@@ -44,6 +44,16 @@ func (r *RoomController) RoomWS(c echo.Context) error {
 	if _, _, err := r.room.GetRoom(c.Request().Context(), roomID, userID); err != nil {
 		return c.JSON(http.StatusForbidden, dto.Fail("forbidden", "room access denied"))
 	}
+	if r.limiter != nil {
+		// WS 接続確立（Upgrade）にもレート制限を適用する。
+		ok, err := r.limiter.Allow(c.Request().Context(), "ws-open:"+userID)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
+		}
+		if !ok {
+			return c.JSON(http.StatusTooManyRequests, dto.Fail("rate_limited", "too many websocket connection attempts"))
+		}
+	}
 	conn, err := wsUpgrader.Upgrade(c.Response(), c.Request(), nil)
 	if err != nil {
 		return err

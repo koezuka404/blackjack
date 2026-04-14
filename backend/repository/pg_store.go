@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // pgStore は repository.Store の PostgreSQL（GORM）実装。
@@ -70,6 +71,10 @@ func (s *pgStore) UpdateRoom(ctx context.Context, room *model.Room) error {
 		return err
 	}
 	return s.db.WithContext(ctx).Save(row).Error
+}
+
+func (s *pgStore) DeleteRoomPlayersByRoomID(ctx context.Context, roomID string) error {
+	return s.db.WithContext(ctx).Where("room_id = ?", roomID).Delete(&RoomPlayerRecord{}).Error
 }
 
 func (s *pgStore) UpdateSessionIfVersion(ctx context.Context, session *model.GameSession, expectedVersion int64) (bool, error) {
@@ -148,6 +153,16 @@ func (s *pgStore) GetSession(ctx context.Context, id string) (*model.GameSession
 	return gameSessionRecordToDomain(&rec)
 }
 
+func (s *pgStore) GetSessionForUpdate(ctx context.Context, id string) (*model.GameSession, error) {
+	var rec GameSessionRecord
+	if err := s.db.WithContext(ctx).
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		First(&rec, "id = ?", id).Error; err != nil {
+		return nil, mapErr(err)
+	}
+	return gameSessionRecordToDomain(&rec)
+}
+
 func (s *pgStore) GetLatestSessionByRoomID(ctx context.Context, roomID string) (*model.GameSession, error) {
 	var rec GameSessionRecord
 	err := s.db.WithContext(ctx).
@@ -218,6 +233,10 @@ func (s *pgStore) ListSessionsByStatus(ctx context.Context, status model.Session
 		out = append(out, item)
 	}
 	return out, nil
+}
+
+func (s *pgStore) DeleteGameSessionsByRoomID(ctx context.Context, roomID string) error {
+	return s.db.WithContext(ctx).Where("room_id = ?", roomID).Delete(&GameSessionRecord{}).Error
 }
 
 func (s *pgStore) CreateRoomPlayer(ctx context.Context, p *model.RoomPlayer) error {

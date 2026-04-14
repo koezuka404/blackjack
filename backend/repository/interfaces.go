@@ -12,6 +12,8 @@ type RoomRepository interface {
 	UpdateRoom(ctx context.Context, room *model.Room) error
 	GetRoom(ctx context.Context, id string) (*model.Room, error)
 	ListRoomsByUserID(ctx context.Context, userID string) ([]*model.Room, error)
+	// DeleteRoomPlayersByRoomID removes all rows in room_players for the room (debug reset / admin).
+	DeleteRoomPlayersByRoomID(ctx context.Context, roomID string) error
 }
 
 type GameSessionRepository interface {
@@ -19,11 +21,15 @@ type GameSessionRepository interface {
 	UpdateSession(ctx context.Context, session *model.GameSession) error
 	UpdateSessionIfVersion(ctx context.Context, session *model.GameSession, expectedVersion int64) (bool, error)
 	GetSession(ctx context.Context, id string) (*model.GameSession, error)
+	// GetSessionForUpdate fetches a session row with FOR UPDATE lock in an active transaction.
+	GetSessionForUpdate(ctx context.Context, id string) (*model.GameSession, error)
 	GetLatestSessionByRoomID(ctx context.Context, roomID string) (*model.GameSession, error)
 	ListSessionsByStatusAndDeadlineBefore(ctx context.Context, status model.SessionStatus, deadline time.Time) ([]*model.GameSession, error)
 	// ListResettingSessionsDueBy returns RESETTING sessions whose rematch_deadline_at is set and <= deadline (Phase 2 / §9.3.11).
 	ListResettingSessionsDueBy(ctx context.Context, deadline time.Time) ([]*model.GameSession, error)
 	ListSessionsByStatus(ctx context.Context, status model.SessionStatus) ([]*model.GameSession, error)
+	// DeleteGameSessionsByRoomID removes all game_sessions (and cascaded children) for the room.
+	DeleteGameSessionsByRoomID(ctx context.Context, roomID string) error
 }
 
 type RoomPlayerRepository interface {

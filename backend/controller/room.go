@@ -2,6 +2,7 @@ package controller
 
 import (
 	"net/http"
+	"os"
 	"time"
 
 	"blackjack/backend/dto"
@@ -34,6 +35,7 @@ func (r *RoomController) Register(g *echo.Group) {
 	g.POST("/rooms/:id/start", r.StartRoom)
 	g.POST("/rooms/:id/hit", r.Hit)
 	g.POST("/rooms/:id/stand", r.Stand)
+	g.POST("/rooms/:id/reset", r.ResetRoomDebug)
 }
 
 // CreateRoom は卓の作成。
@@ -242,6 +244,38 @@ func (r *RoomController) Hit(c echo.Context) error {
 // Stand は HTTP 経由のスタンド。
 func (r *RoomController) Stand(c echo.Context) error {
 	return r.turnAction(c, false)
+}
+
+// ResetRoomDebug は開発専用の卓リセット（§15.3）。BLACKJACK_DEBUG_ROOM_RESET=true のときのみ有効。
+func (r *RoomController) ResetRoomDebug(c echo.Context) error {
+	if os.Getenv("BLACKJACK_DEBUG_ROOM_RESET") != "true" {
+		return c.JSON(http.StatusForbidden, dto.Fail("debug_disabled", "room reset is disabled"))
+	}
+	userID, _ := c.Get("user_id").(string)
+	roomID := c.Param("id")
+	room, err := r.room.ResetRoomForDebug(c.Request().Context(), roomID, userID)
+	if err != nil {
+		switch err {
+		case usecase.ErrUnauthorizedUser:
+			return c.JSON(http.StatusUnauthorized, dto.Fail("unauthorized", "login required"))
+		case usecase.ErrForbiddenAction:
+			return c.JSON(http.StatusForbidden, dto.Fail("forbidden", "only host can reset room"))
+		case usecase.ErrInvalidInput:
+			return c.JSON(http.StatusBadRequest, dto.Fail("invalid_input", "room id is required"))
+		case repository.ErrNotFound:
+			return c.JSON(http.StatusNotFound, dto.Fail("room_not_found", "room not found"))
+		default:
+			return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
+		}
+	}
+	r.broadcastRoomState(c.Request().Context(), roomID, userID, "ROOM_STATE_SYNC")
+	return c.JSON(http.StatusOK, dto.OK(dto.CreateRoomData{
+		Room: dto.RoomDetailJSON{
+			ID:         room.ID,
+			HostUserID: room.HostUserID,
+			Status:     string(room.Status),
+		},
+	}))
 }
 
 // RematchVote は HTTP 経由の再戦投票（仕様上は WS が主）。

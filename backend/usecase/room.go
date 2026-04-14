@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"time"
 
-	"blackjack/backend/adapter/blackjackadapter"
 	"blackjack/backend/model"
 	"blackjack/backend/repository"
 
@@ -38,6 +37,8 @@ type RoomUsecase interface {
 	MarkConnected(ctx context.Context, roomID, userID string) error
 	MarkDisconnected(ctx context.Context, roomID, userID string) error
 	AutoStandDueSessions(ctx context.Context) ([]string, error)
+	// ResetRoomForDebug は開発用に卓を初期状態へ戻す（§15.3）。本番無効化は Controller 側。
+	ResetRoomForDebug(ctx context.Context, roomID, userID string) (*model.Room, error)
 }
 
 type RoomState struct {
@@ -53,13 +54,15 @@ type RoomState struct {
 type roomService struct {
 	store     repository.Store
 	evaluator model.HandEvaluator
+	engine    model.RoundEngine
 }
 
 // NewRoomUsecase はルーム・ゲーム進行のユースケースを組み立てる。
-func NewRoomUsecase(store repository.Store) RoomUsecase {
+func NewRoomUsecase(store repository.Store, evaluator model.HandEvaluator, engine model.RoundEngine) RoomUsecase {
 	return &roomService{
 		store:     store,
-		evaluator: blackjackadapter.NewHandEvaluator(),
+		evaluator: evaluator,
+		engine:    engine,
 	}
 }
 
@@ -228,6 +231,49 @@ func (u *roomService) LeaveRoom(ctx context.Context, roomID, userID string) (*mo
 	return room, nil
 }
 
+// ResetRoomForDebug は開発用に game_sessions 系と room_players を削除し、卓を WAITING に戻す（§15.3）。
+func (u *roomService) ResetRoomForDebug(ctx context.Context, roomID, userID string) (*model.Room, error) {
+	if userID == "" {
+		return nil, ErrUnauthorizedUser
+	}
+	if roomID == "" {
+		return nil, ErrInvalidInput
+	}
+	var out *model.Room
+	if err := u.store.Transaction(ctx, func(tx repository.Store) error {
+		room, err := tx.GetRoom(ctx, roomID)
+		if err != nil {
+			return err
+		}
+		if room.HostUserID != userID {
+			return ErrForbiddenAction
+		}
+		now := time.Now().UTC()
+		room.CurrentSessionID = nil
+		if err := tx.UpdateRoom(ctx, room); err != nil {
+			return err
+		}
+		if err := tx.DeleteGameSessionsByRoomID(ctx, roomID); err != nil {
+			return err
+		}
+		if err := tx.DeleteRoomPlayersByRoomID(ctx, roomID); err != nil {
+			return err
+		}
+		if err := room.RecalculateStatus(0, false); err != nil {
+			return err
+		}
+		room.Touch(now)
+		if err := tx.UpdateRoom(ctx, room); err != nil {
+			return err
+		}
+		out = room
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GetRoomHistory は卓のラウンド監査ログ（round_logs）を参加者向けに返す。
 func (u *roomService) GetRoomHistory(ctx context.Context, roomID, userID string) ([]*model.RoundLog, error) {
 	if userID == "" {
@@ -307,7 +353,7 @@ func (u *roomService) StartRoom(ctx context.Context, roomID, userID string) (*mo
 		return nil, nil, err
 	}
 
-	if err := initialDeal(sess, pstate, dealer); err != nil {
+	if err := u.initialDeal(sess, pstate, dealer); err != nil {
 		return nil, nil, err
 	}
 	if err := sess.TransitionTo(model.SessionStatusPlayerTurn); err != nil {
@@ -422,7 +468,11 @@ func (u *roomService) playAction(ctx context.Context, roomID, userID string, exp
 		if err != nil {
 			return nil, nil, err
 		}
-		player.AppendCard(card)
+		nextHand, err := u.engine.ApplyPlayerHit(player.Hand, card)
+		if err != nil {
+			return nil, nil, err
+		}
+		player.Hand = nextHand
 		v := u.evaluator.Value(player.Hand)
 		if v > 21 {
 			if err := player.SetStatus(model.PlayerStatusBust); err != nil {
@@ -613,7 +663,7 @@ func (u *roomService) rematchUnanimousSuccessTx(ctx context.Context, tx reposito
 	if err != nil {
 		return nil, err
 	}
-	if err := initialDeal(next, pstate, dealer); err != nil {
+	if err := u.initialDeal(next, pstate, dealer); err != nil {
 		return nil, err
 	}
 	if err := next.TransitionTo(model.SessionStatusPlayerTurn); err != nil {
@@ -672,12 +722,6 @@ func (u *roomService) VoteRematch(ctx context.Context, roomID, userID string, ag
 	if err != nil {
 		return nil, nil, err
 	}
-	if sess.Status != model.SessionStatusResetting {
-		return nil, nil, ErrInvalidGameState
-	}
-	if err := sess.CheckVersion(expectedVersion); err != nil {
-		return nil, nil, err
-	}
 
 	payload := "REMATCH_VOTE:" + strconv.FormatBool(agree) + ":" + strconv.FormatInt(expectedVersion, 10)
 	hash := sha256.Sum256([]byte(payload))
@@ -690,52 +734,64 @@ func (u *roomService) VoteRematch(ctx context.Context, roomID, userID string, ag
 		RequestType:        "REMATCH_VOTE",
 		RequestPayloadHash: hex.EncodeToString(hash[:]),
 	}
-	if _, replay, err := EnsureActionIdempotency(ctx, u.store, actionLog); err != nil {
-		return nil, nil, err
-	} else if replay {
-		return room, sess, nil
-	}
-
-	roomPlayers, err := u.store.ListRoomPlayersByRoomID(ctx, roomID)
-	if err != nil {
-		return nil, nil, err
-	}
-	eligible := rematchEligibleUserIDs(roomPlayers)
-	eligibleOK := false
-	for _, uid := range eligible {
-		if uid == userID {
-			eligibleOK = true
-			break
-		}
-	}
-	if !eligibleOK {
-		return nil, nil, ErrForbiddenAction
-	}
-
-	vote := &model.RematchVote{
-		SessionID: sess.ID,
-		UserID:    userID,
-		Agree:     agree,
-	}
-	now := time.Now().UTC()
-	if sess.RematchDeadlineAt == nil {
-		sess.SetRematchDeadline(now)
-	}
-
-	votes, err := u.store.ListRematchVotes(ctx, sess.ID)
-	if err != nil && err != repository.ErrNotFound {
-		return nil, nil, err
-	}
-	agreeMap := map[string]bool{}
-	for _, v := range votes {
-		agreeMap[v.UserID] = v.Agree
-	}
-	agreeMap[userID] = agree
-
-	unanimous := model.RematchUnanimous(eligible, agreeMap)
-	denial := hasExplicitRematchDenial(eligible, agreeMap)
+	lockedSessionID := sess.ID
 
 	if err := u.store.Transaction(ctx, func(tx repository.Store) error {
+		locked, err := tx.GetSessionForUpdate(ctx, lockedSessionID)
+		if err != nil {
+			return err
+		}
+		if locked.Status != model.SessionStatusResetting {
+			return ErrInvalidGameState
+		}
+		if err := locked.CheckVersion(expectedVersion); err != nil {
+			return err
+		}
+		sess = locked
+		actionLog.SessionID = sess.ID
+
+		if _, replay, err := EnsureActionIdempotency(ctx, tx, actionLog); err != nil {
+			return err
+		} else if replay {
+			return nil
+		}
+		roomPlayers, err := tx.ListRoomPlayersByRoomID(ctx, roomID)
+		if err != nil {
+			return err
+		}
+		eligible := rematchEligibleUserIDs(roomPlayers)
+		eligibleOK := false
+		for _, uid := range eligible {
+			if uid == userID {
+				eligibleOK = true
+				break
+			}
+		}
+		if !eligibleOK {
+			return ErrForbiddenAction
+		}
+
+		vote := &model.RematchVote{
+			SessionID: sess.ID,
+			UserID:    userID,
+			Agree:     agree,
+		}
+		now := time.Now().UTC()
+		if sess.RematchDeadlineAt == nil {
+			sess.SetRematchDeadline(now)
+		}
+		votes, err := tx.ListRematchVotes(ctx, sess.ID)
+		if err != nil && err != repository.ErrNotFound {
+			return err
+		}
+		agreeMap := map[string]bool{}
+		for _, v := range votes {
+			agreeMap[v.UserID] = v.Agree
+		}
+		agreeMap[userID] = agree
+		unanimous := model.RematchUnanimous(eligible, agreeMap)
+		denial := hasExplicitRematchDenial(eligible, agreeMap)
+
 		if err := tx.UpsertRematchVote(ctx, vote); err != nil {
 			return err
 		}
@@ -780,32 +836,51 @@ func (u *roomService) VoteRematch(ctx context.Context, roomID, userID string, ag
 }
 
 // initialDeal はラウンド開始時の4枚配札（プレイヤー2・ディーラー2）を行う。
-func initialDeal(sess *model.GameSession, p *model.PlayerState, d *model.DealerState) error {
+func (u *roomService) initialDeal(sess *model.GameSession, p *model.PlayerState, d *model.DealerState) error {
+	deal := func(hand []model.StoredCard, c model.StoredCard) ([]model.StoredCard, error) {
+		return u.engine.ApplyPlayerHit(hand, c)
+	}
 	c1, err := sess.DrawCard()
 	if err != nil {
 		return err
 	}
-	p.AppendCard(c1)
+	ph, err := deal(p.Hand, c1)
+	if err != nil {
+		return err
+	}
+	p.Hand = ph
 	c2, err := sess.DrawCard()
 	if err != nil {
 		return err
 	}
-	d.AppendCard(c2)
+	dh, err := deal(d.Hand, c2)
+	if err != nil {
+		return err
+	}
+	d.Hand = dh
 	c3, err := sess.DrawCard()
 	if err != nil {
 		return err
 	}
-	p.AppendCard(c3)
+	ph, err = deal(p.Hand, c3)
+	if err != nil {
+		return err
+	}
+	p.Hand = ph
 	c4, err := sess.DrawCard()
 	if err != nil {
 		return err
 	}
-	d.AppendCard(c4)
+	dh, err = deal(d.Hand, c4)
+	if err != nil {
+		return err
+	}
+	d.Hand = dh
 	return nil
 }
 
 // settleDealerAndResult はディーラー手を公開し勝敗・round_log 用ペイロードを確定する。
-func settleDealerAndResult(ev model.HandEvaluator, sess *model.GameSession, p *model.PlayerState, d *model.DealerState, now time.Time) (*model.RoundLog, error) {
+func (u *roomService) settleDealerAndResult(sess *model.GameSession, p *model.PlayerState, d *model.DealerState, now time.Time) (*model.RoundLog, error) {
 	d.RevealHole()
 	if err := sess.TransitionTo(model.SessionStatusResult); err != nil {
 		return nil, err
@@ -814,9 +889,9 @@ func settleDealerAndResult(ev model.HandEvaluator, sess *model.GameSession, p *m
 		return nil, err
 	}
 	sess.SetRematchDeadline(now)
-	pScore := ev.Value(p.Hand)
-	dScore := ev.Value(d.Hand)
-	outcome, err := model.ResolveRoundOutcome(ev, p.Hand, d.Hand)
+	pScore := u.evaluator.Value(p.Hand)
+	dScore := u.evaluator.Value(d.Hand)
+	outcome, err := u.engine.ResolveOutcome(u.evaluator, p.Hand, d.Hand)
 	if err != nil {
 		return nil, err
 	}
@@ -930,7 +1005,7 @@ func (u *roomService) AutoStandDueSessions(ctx context.Context) ([]string, error
 // processRematchDeadline は RESETTING の再戦締切到達時に成⽴/不成⽴を確定する。
 func (u *roomService) processRematchDeadline(ctx context.Context, sessionID string) error {
 	return u.store.Transaction(ctx, func(tx repository.Store) error {
-		sess, err := tx.GetSession(ctx, sessionID)
+		sess, err := tx.GetSessionForUpdate(ctx, sessionID)
 		if err != nil {
 			return err
 		}
@@ -1079,7 +1154,7 @@ func (u *roomService) advanceDealerOneStep(ctx context.Context, sessionID string
 	sessPrev := sess.Version
 	var roundLog *model.RoundLog
 	if terminal || action == model.DealerActionStand {
-		roundLog, err = settleDealerAndResult(u.evaluator, sess, player, dealer, now)
+		roundLog, err = u.settleDealerAndResult(sess, player, dealer, now)
 		if err != nil {
 			return err
 		}
@@ -1093,7 +1168,11 @@ func (u *roomService) advanceDealerOneStep(ctx context.Context, sessionID string
 		if err != nil {
 			return err
 		}
-		dealer.AppendCard(card)
+		nextHand, err := u.engine.ApplyPlayerHit(dealer.Hand, card)
+		if err != nil {
+			return err
+		}
+		dealer.Hand = nextHand
 	}
 	sess.IncrementVersion()
 	sess.Touch(now)

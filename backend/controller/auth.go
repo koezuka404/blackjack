@@ -5,6 +5,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"blackjack/backend/dto"
@@ -157,9 +160,18 @@ func clearSessionCookie(c echo.Context) {
 	})
 }
 
-// cookieSecure は Secure 属性（本番想定で true）。
+// cookieSecure は Secure 属性を環境変数 COOKIE_SECURE で切り替える。
+// 未設定または不正値は安全側（true）を使う。
 func cookieSecure() bool {
-	return true
+	raw := strings.TrimSpace(os.Getenv("COOKIE_SECURE"))
+	if raw == "" {
+		return true
+	}
+	v, err := strconv.ParseBool(raw)
+	if err != nil {
+		return true
+	}
+	return v
 }
 
 // setCSRFCookie は Double Submit 用 csrf_token をセットする。
