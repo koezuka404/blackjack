@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math/big"
+	"sort"
 	"strconv"
 	"time"
 
@@ -215,9 +216,28 @@ func (u *roomService) LeaveRoom(ctx context.Context, roomID, userID string) (*mo
 	if p.Status == model.RoomPlayerLeft {
 		return room, nil
 	}
+	players, err := u.store.ListRoomPlayersByRoomID(ctx, roomID)
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now().UTC()
 	p.MarkLeft(now)
-	if err := room.RecalculateStatus(0, false); err != nil {
+	activeAfterLeave := 0
+	for _, rp := range players {
+		if rp.UserID == userID {
+			continue
+		}
+		if rp.Status == model.RoomPlayerActive || rp.Status == model.RoomPlayerDisconnected {
+			activeAfterLeave++
+		}
+	}
+	// 仕様 §12.7: host が LEFT の場合は最小 seat の有効参加者へ委譲する。
+	if room.HostUserID == userID {
+		if nextHost := selectNextHost(players, userID); nextHost != nil {
+			room.HostUserID = nextHost.UserID
+		}
+	}
+	if err := room.RecalculateStatus(activeAfterLeave, false); err != nil {
 		return nil, err
 	}
 	room.Touch(now)
@@ -230,6 +250,28 @@ func (u *roomService) LeaveRoom(ctx context.Context, roomID, userID string) (*mo
 		return nil, err
 	}
 	return room, nil
+}
+
+func selectNextHost(players []*model.RoomPlayer, leavingUserID string) *model.RoomPlayer {
+	candidates := make([]*model.RoomPlayer, 0)
+	for _, p := range players {
+		if p.UserID == leavingUserID {
+			continue
+		}
+		if p.Status == model.RoomPlayerActive || p.Status == model.RoomPlayerDisconnected {
+			candidates = append(candidates, p)
+		}
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].SeatNo != candidates[j].SeatNo {
+			return candidates[i].SeatNo < candidates[j].SeatNo
+		}
+		return candidates[i].UserID < candidates[j].UserID
+	})
+	return candidates[0]
 }
 
 // ResetRoomForDebug は開発用に game_sessions 系と room_players を削除し、卓を WAITING に戻す（§15.3）。
