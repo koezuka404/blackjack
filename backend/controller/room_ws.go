@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,6 +36,44 @@ var globalRoomHub = &roomHub{rooms: map[string]map[*websocket.Conn]wsConnMeta{},
 
 var wsUpgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
+// ConfigureWebSocketAllowedOrigins は本番用に WS の Origin を制限する。
+// origins が空のときは CheckOrigin が常に true（ローカル開発向け）。1 件以上あるときは Origin ヘッダがいずれかと完全一致する場合のみ許可する。
+func ConfigureWebSocketAllowedOrigins(origins []string) {
+	trimmed := make([]string, 0, len(origins))
+	for _, o := range origins {
+		o = strings.TrimSpace(o)
+		if o != "" {
+			trimmed = append(trimmed, o)
+		}
+	}
+	if len(trimmed) == 0 {
+		wsUpgrader.CheckOrigin = func(r *http.Request) bool { return true }
+		return
+	}
+	wsUpgrader.CheckOrigin = func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		for _, o := range trimmed {
+			if o == origin {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// wsShouldMarkDisconnected は環境変数 BLACKJACK_WS_MARK_DISCONNECTED（true/false）で WS 切断時の DISCONNECTED 反映を制御する。未設定は true。
+func wsShouldMarkDisconnected() bool {
+	v := strings.TrimSpace(os.Getenv("BLACKJACK_WS_MARK_DISCONNECTED"))
+	if v == "" {
+		return true
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return true
+	}
+	return b
 }
 
 // RoomWS は卓用 WebSocket（受信ループ・レート制限・多重接続の最新のみ有効）。
@@ -72,7 +113,7 @@ func (r *RoomController) RoomWS(c echo.Context) error {
 	r.broadcastRoomState(c.Request().Context(), roomID, userID, "ROOM_STATE_SYNC")
 	go func() {
 		defer func() {
-			if globalRoomHub.isLatest(roomID, userID, conn) {
+			if globalRoomHub.isLatest(roomID, userID, conn) && wsShouldMarkDisconnected() {
 				_ = r.room.MarkDisconnected(context.Background(), roomID, userID)
 			}
 			globalRoomHub.remove(roomID, conn)

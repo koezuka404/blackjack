@@ -59,6 +59,7 @@ type AuthRepository interface {
 	UpsertSession(ctx context.Context, session *model.Session) error
 	GetAuthSession(ctx context.Context, sessionID string) (*model.Session, error)
 	DeleteSession(ctx context.Context, sessionID string) error
+	DeleteSessionsByUserID(ctx context.Context, userID string) error
 	DeleteExpiredSessions(ctx context.Context) error
 }
 

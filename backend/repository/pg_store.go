@@ -385,6 +385,10 @@ func (s *pgStore) DeleteSession(ctx context.Context, sessionID string) error {
 	return s.db.WithContext(ctx).Delete(&SessionRecord{}, "id = ?", sessionID).Error
 }
 
+func (s *pgStore) DeleteSessionsByUserID(ctx context.Context, userID string) error {
+	return s.db.WithContext(ctx).Delete(&SessionRecord{}, "user_id = ?", userID).Error
+}
+
 func (s *pgStore) DeleteExpiredSessions(ctx context.Context) error {
 	return s.db.WithContext(ctx).
 		Delete(&SessionRecord{}, "expires_at <= ?", time.Now().UTC()).

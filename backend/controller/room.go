@@ -279,7 +279,7 @@ func (r *RoomController) ResetRoomDebug(c echo.Context) error {
 	}))
 }
 
-// RematchVote は HTTP 経由の再戦投票（仕様上は WS が主）。
+// RematchVote は再戦投票処理本体。仕様 §12.2 により HTTP ルートには公開せず、WS REMATCH_VOTE から利用する。
 func (r *RoomController) RematchVote(c echo.Context) error {
 	userID, _ := c.Get("user_id").(string)
 	roomID := c.Param("id")

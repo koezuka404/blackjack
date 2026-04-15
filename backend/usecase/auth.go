@@ -122,7 +122,13 @@ func (u *authService) Login(ctx context.Context, username, password string) (Aut
 		ExpiresAt: expiresAt,
 		CreatedAt: time.Now().UTC(),
 	}
-	if err := u.store.UpsertSession(ctx, sess); err != nil {
+	if err := u.store.Transaction(ctx, func(tx repository.Store) error {
+		// session fixation 防止のため、同一ユーザーの既存セッションを無効化してから新規発行する。
+		if err := tx.DeleteSessionsByUserID(ctx, user.ID); err != nil {
+			return err
+		}
+		return tx.UpsertSession(ctx, sess)
+	}); err != nil {
 		return nil, err
 	}
 	_ = u.store.DeleteExpiredSessions(ctx)
