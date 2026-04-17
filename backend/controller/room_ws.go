@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"strconv"
@@ -14,15 +15,18 @@ import (
 	"blackjack/backend/dto"
 	"blackjack/backend/middleware"
 	"blackjack/backend/model"
+	"blackjack/backend/observability"
 	"blackjack/backend/repository"
 	"blackjack/backend/usecase"
 
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
+	"github.com/redis/go-redis/v9"
 )
 
 type wsConnMeta struct {
 	userID  string
+	epoch   int64
 	writeMu *sync.Mutex
 }
 
@@ -37,6 +41,11 @@ var globalRoomHub = &roomHub{rooms: map[string]map[*websocket.Conn]wsConnMeta{},
 var wsUpgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
+
+var (
+	wsEpochRedis *redis.Client
+	wsEpochTTL   = 2 * time.Minute
+)
 
 // ConfigureWebSocketAllowedOrigins は本番用に WS の Origin を制限する。
 // origins が空のときは CheckOrigin が常に true（ローカル開発向け）。1 件以上あるときは Origin ヘッダがいずれかと完全一致する場合のみ許可する。
@@ -76,6 +85,58 @@ func wsShouldMarkDisconnected() bool {
 	return b
 }
 
+// ConfigureWebSocketConnectionEpochStore configures Redis-backed connection_epoch enforcement (§13.3).
+// If rdb is nil, epoch checks are disabled and single-process in-memory latest-only behavior remains.
+func ConfigureWebSocketConnectionEpochStore(rdb *redis.Client, ttl time.Duration) {
+	wsEpochRedis = rdb
+	if ttl > 0 {
+		wsEpochTTL = ttl
+	}
+}
+
+func wsEpochCounterKey(roomID, userID string) string {
+	return fmt.Sprintf("ws:room:%s:user:%s:epoch_counter", roomID, userID)
+}
+
+func wsEpochLatestKey(roomID, userID string) string {
+	return fmt.Sprintf("ws:room:%s:user:%s:latest_epoch", roomID, userID)
+}
+
+func registerConnectionEpoch(ctx context.Context, roomID, userID string) (int64, error) {
+	if wsEpochRedis == nil {
+		return 0, nil
+	}
+	epoch, err := wsEpochRedis.Incr(ctx, wsEpochCounterKey(roomID, userID)).Result()
+	if err != nil {
+		return 0, err
+	}
+	if err := wsEpochRedis.Set(ctx, wsEpochLatestKey(roomID, userID), epoch, wsEpochTTL).Err(); err != nil {
+		return 0, err
+	}
+	return epoch, nil
+}
+
+func refreshConnectionEpoch(ctx context.Context, roomID, userID string, epoch int64) error {
+	if wsEpochRedis == nil || epoch <= 0 {
+		return nil
+	}
+	return wsEpochRedis.Set(ctx, wsEpochLatestKey(roomID, userID), epoch, wsEpochTTL).Err()
+}
+
+func isCurrentConnectionEpoch(ctx context.Context, roomID, userID string, epoch int64) (bool, error) {
+	if wsEpochRedis == nil || epoch <= 0 {
+		return true, nil
+	}
+	current, err := wsEpochRedis.Get(ctx, wsEpochLatestKey(roomID, userID)).Int64()
+	if err == redis.Nil {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return current == epoch, nil
+}
+
 // RoomWS は卓用 WebSocket（受信ループ・レート制限・多重接続の最新のみ有効）。
 func (r *RoomController) RoomWS(c echo.Context) error {
 	userID, _ := c.Get("user_id").(string)
@@ -83,7 +144,8 @@ func (r *RoomController) RoomWS(c echo.Context) error {
 	if userID == "" || roomID == "" {
 		return c.JSON(http.StatusBadRequest, dto.Fail("invalid_input", "user and room are required"))
 	}
-	if _, _, err := r.room.GetRoom(c.Request().Context(), roomID, userID); err != nil {
+	_, sess, err := r.room.GetRoom(c.Request().Context(), roomID, userID)
+	if err != nil {
 		return c.JSON(http.StatusForbidden, dto.Fail("forbidden", "room access denied"))
 	}
 	if r.limiter != nil {
@@ -101,22 +163,46 @@ func (r *RoomController) RoomWS(c echo.Context) error {
 		return err
 	}
 	// 最新接続のみ有効化するため、同一 room+userの古い接続はclose
-	meta := wsConnMeta{userID: userID, writeMu: &sync.Mutex{}}
+	epoch, err := registerConnectionEpoch(c.Request().Context(), roomID, userID)
+	if err != nil {
+		_ = conn.Close()
+		return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
+	}
+	meta := wsConnMeta{userID: userID, epoch: epoch, writeMu: &sync.Mutex{}}
 	if err := r.room.MarkConnected(c.Request().Context(), roomID, userID); err != nil && err != repository.ErrNotFound {
 		_ = conn.Close()
 		return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
 	}
 	old := globalRoomHub.add(roomID, conn, meta)
+	observability.IncActiveWSConnections()
 	if old != nil {
+		observability.IncReconnect()
 		_ = old.Close()
 	}
+	var gameSessPtr *string
+	if sess != nil {
+		sid := sess.ID
+		gameSessPtr = &sid
+	}
+	middleware.SetAuditGameSessionID(c, gameSessPtr)
+	middleware.SetAuditExtra(c, map[string]any{
+		"audit_event":      "WS_CONNECTION_EPOCH_ASSIGNED",
+		"connection_epoch": epoch,
+	})
 	r.broadcastRoomState(c.Request().Context(), roomID, userID, "ROOM_STATE_SYNC")
 	go func() {
 		defer func() {
-			if globalRoomHub.isLatest(roomID, userID, conn) && wsShouldMarkDisconnected() {
+			isLatest := globalRoomHub.isLatest(roomID, userID, conn)
+			isCurrentEpoch, epochErr := isCurrentConnectionEpoch(context.Background(), roomID, userID, meta.epoch)
+			if epochErr != nil {
+				// Redis 瞬断時は誤切断を避けるため in-memory latest 判定のみで継続する。
+				isCurrentEpoch = true
+			}
+			if isLatest && isCurrentEpoch && wsShouldMarkDisconnected() {
 				_ = r.room.MarkDisconnected(context.Background(), roomID, userID)
 			}
 			globalRoomHub.remove(roomID, conn)
+			observability.DecActiveWSConnections()
 			_ = conn.Close()
 		}()
 		for {
@@ -142,6 +228,23 @@ func (r *RoomController) RoomWS(c echo.Context) error {
 				sendWSError(conn, meta, dto.WSErrorInvalidInput, "invalid message payload")
 				continue
 			}
+			if err := refreshConnectionEpoch(context.Background(), roomID, userID, meta.epoch); err != nil {
+				sendWSError(conn, meta, dto.WSErrorInternal, err.Error())
+				continue
+			}
+			isCurrentEpoch, err := isCurrentConnectionEpoch(context.Background(), roomID, userID, meta.epoch)
+			if err != nil {
+				sendWSError(conn, meta, dto.WSErrorInternal, err.Error())
+				continue
+			}
+			if !isCurrentEpoch {
+				logWSEvent(c, req, roomID, userID, nil, nil, nil, msgStart, "failure", dto.WSErrorForbidden, map[string]any{
+					"audit_event":      "WS_CONNECTION_EPOCH_SUPERSEDED",
+					"connection_epoch": meta.epoch,
+				})
+				sendWSError(conn, meta, dto.WSErrorForbidden, "stale websocket connection")
+				return
+			}
 			switch req.Type {
 			case dto.WSEventHit:
 				// 更新系: action_id + expected_version
@@ -153,12 +256,13 @@ func (r *RoomController) RoomWS(c echo.Context) error {
 				ev := req.ExpectedVersion
 				if err != nil {
 					code, message := mapWSError(err)
-					logWSEvent(c, req, roomID, userID, &ev, &ev, msgStart, "failure", code)
+					logWSEvent(c, req, roomID, userID, nil, &ev, &ev, msgStart, "failure", code, nil)
 					sendWSError(conn, meta, code, message)
 					continue
 				}
 				sv := sess.Version
-				logWSEvent(c, req, roomID, userID, &ev, &sv, msgStart, "success", "")
+				gid := sess.ID
+				logWSEvent(c, req, roomID, userID, &gid, &ev, &sv, msgStart, "success", "", nil)
 				r.broadcastRoomState(context.Background(), roomID, userID, dto.WSEventRoomSync)
 			case dto.WSEventStand:
 				// 更新系: STAND も HIT と同じ検証・整合性フローで処理する
@@ -170,12 +274,13 @@ func (r *RoomController) RoomWS(c echo.Context) error {
 				ev := req.ExpectedVersion
 				if err != nil {
 					code, message := mapWSError(err)
-					logWSEvent(c, req, roomID, userID, &ev, &ev, msgStart, "failure", code)
+					logWSEvent(c, req, roomID, userID, nil, &ev, &ev, msgStart, "failure", code, nil)
 					sendWSError(conn, meta, code, message)
 					continue
 				}
 				sv := sess.Version
-				logWSEvent(c, req, roomID, userID, &ev, &sv, msgStart, "success", "")
+				gid := sess.ID
+				logWSEvent(c, req, roomID, userID, &gid, &ev, &sv, msgStart, "success", "", nil)
 				r.broadcastRoomState(context.Background(), roomID, userID, dto.WSEventRoomSync)
 			case dto.WSEventRematchVote:
 				// 再戦投票は WS のみ受け付ける（HTTP fallback なし）
@@ -187,23 +292,24 @@ func (r *RoomController) RoomWS(c echo.Context) error {
 				ev := req.ExpectedVersion
 				if err != nil {
 					code, message := mapWSError(err)
-					logWSEvent(c, req, roomID, userID, &ev, &ev, msgStart, "failure", code)
+					logWSEvent(c, req, roomID, userID, nil, &ev, &ev, msgStart, "failure", code, nil)
 					sendWSError(conn, meta, code, message)
 					continue
 				}
 				sv := sess.Version
-				logWSEvent(c, req, roomID, userID, &ev, &sv, msgStart, "success", "")
+				gid := sess.ID
+				logWSEvent(c, req, roomID, userID, &gid, &ev, &sv, msgStart, "success", "", nil)
 				r.broadcastRoomState(context.Background(), roomID, userID, dto.WSEventRoomSync)
 			case dto.WSEventRoomSyncReq:
 				// 読み取り系同期要求は version 不一致をエラーにせず、正本を再送する
-				logWSEvent(c, req, roomID, userID, nil, nil, msgStart, "success", "")
+				logWSEvent(c, req, roomID, userID, nil, nil, nil, msgStart, "success", "", nil)
 				r.broadcastRoomState(context.Background(), roomID, userID, dto.WSEventRoomSync)
 			case dto.WSEventPing:
 				// 接続が生きているか確認
-				logWSEvent(c, req, roomID, userID, nil, nil, msgStart, "success", "")
+				logWSEvent(c, req, roomID, userID, nil, nil, nil, msgStart, "success", "", nil)
 				sendWSPong(conn, meta)
 			default:
-				logWSEvent(c, req, roomID, userID, nil, nil, msgStart, "failure", dto.WSErrorInvalidInput)
+				logWSEvent(c, req, roomID, userID, nil, nil, nil, msgStart, "failure", dto.WSErrorInvalidInput, nil)
 				sendWSError(conn, meta, dto.WSErrorInvalidInput, "unsupported ws event type")
 			}
 		}
@@ -211,8 +317,21 @@ func (r *RoomController) RoomWS(c echo.Context) error {
 	return nil
 }
 
-// broadcastRoomState は卓の全接続へユーザー別に ROOM_STATE_SYNC を送る。
+// broadcastRoomState は自インスタンスの WS 接続へ配信し、続けて Redis Pub/Sub で他インスタンスへ伝える（Phase 3）。
 func (r *RoomController) broadcastRoomState(ctx context.Context, roomID, actorUserID, eventType string) {
+	r.broadcastRoomStateLocal(ctx, roomID, actorUserID, eventType)
+	if r.syncBroker != nil {
+		_ = r.syncBroker.Publish(context.Background(), roomID, eventType)
+	}
+}
+
+// BroadcastRoomStateFromPeer は他インスタンスからの Pub/Sub 通知に応じ、ローカル接続のみへ同期する（再 publish しない）。
+func (r *RoomController) BroadcastRoomStateFromPeer(ctx context.Context, roomID, eventType string) {
+	r.broadcastRoomStateLocal(ctx, roomID, "", eventType)
+}
+
+// broadcastRoomStateLocal は卓の全接続へユーザー別に ROOM_STATE_SYNC を送る。
+func (r *RoomController) broadcastRoomStateLocal(ctx context.Context, roomID, actorUserID, eventType string) {
 	// room参加中の全接続へ、ユーザーごとの公開範囲で state を組み立てて送信する
 	snapshot := globalRoomHub.snapshot(roomID)
 	for conn, meta := range snapshot {
@@ -244,8 +363,11 @@ func (r *RoomController) BroadcastRoomSync(ctx context.Context, roomID string) {
 func writeWS(conn *websocket.Conn, meta wsConnMeta, payload []byte) error {
 	meta.writeMu.Lock()
 	defer meta.writeMu.Unlock()
+	start := time.Now()
 	_ = conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
-	return conn.WriteMessage(websocket.TextMessage, payload)
+	err := conn.WriteMessage(websocket.TextMessage, payload)
+	observability.ObserveWSSendLatency(time.Since(start).Seconds())
+	return err
 }
 
 // sendWSError は WS 用の ERROR ペイロードを送る。
@@ -287,8 +409,10 @@ func mapWSError(err error) (string, string) {
 	case model.ErrRoomFull:
 		return dto.WSErrorRoomFull, "room is full"
 	case model.ErrVersionConflict:
+		observability.IncVersionConflict()
 		return dto.WSErrorVersionConflict, "session version conflict"
 	case model.ErrDuplicateAction:
+		observability.IncDuplicateAction()
 		return dto.WSErrorDuplicateAction, "action id already used with different payload"
 	case repository.ErrNotFound:
 		return dto.WSErrorNotFound, "room or session not found"
@@ -438,10 +562,14 @@ func (h *roomHub) isLatest(roomID, userID string, conn *websocket.Conn) bool {
 }
 
 // logWSEvent は WS メッセージごとの構造化監査ログを出す（HTTP AuditLogMiddleware と同一スキーマ）。
-func logWSEvent(c echo.Context, req dto.WSActionRequest, roomID, userID string, before, after *int64, start time.Time, result, errorCode string) {
+func logWSEvent(c echo.Context, req dto.WSActionRequest, roomID, userID string, gameSessionID *string, before, after *int64, start time.Time, result, errorCode string, extra map[string]any) {
 	reqID := req.RequestID
 	if reqID == "" {
 		reqID, _ = c.Get(middleware.RequestIDContextKey).(string)
+	}
+	var gs any
+	if gameSessionID != nil {
+		gs = *gameSessionID
 	}
 	entry := auditlog.BuildEntry(
 		start,
@@ -449,6 +577,7 @@ func logWSEvent(c echo.Context, req dto.WSActionRequest, roomID, userID string, 
 		req.ActionID,
 		roomID,
 		c.Get("session_id"),
+		gs,
 		userID,
 		"USER",
 		"WS "+req.Type,
@@ -457,6 +586,8 @@ func logWSEvent(c echo.Context, req dto.WSActionRequest, roomID, userID string, 
 		time.Since(start).Milliseconds(),
 		result,
 		errorCode,
+		extra,
 	)
 	auditlog.Info(c.Logger(), entry)
+	observability.ObserveWSMessage(req.Type, result, time.Since(start).Seconds())
 }

@@ -1,5 +1,3 @@
-# 実装仕様書 §18.3（PR 時の必須ジョブのうち、リポジトリ現状に合わせた最小セット）
-# gosec ジョブ: 静的セキュリティスキャン（仕様 18.5 の入口）
 name: CI
 
 on:
@@ -34,22 +32,6 @@ jobs:
       - name: go test
         run: go test ./...
 
-  gosec:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: backend/go.mod
-          cache-dependency-path: backend/go.sum
-
-      - name: gosec
-        run: go run github.com/securego/gosec/v2/cmd/gosec@v2.22.3 -fmt text ./...
-
   frontend:
     runs-on: ubuntu-latest
     defaults:
@@ -70,5 +52,183 @@ jobs:
       - name: npm run lint
         run: npm run lint
 
+      - name: npm run test (if present)
+        run: npm run test --if-present
+
       - name: npm run build
         run: npm run build
+
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: blackjack
+          POSTGRES_USER: blackjack
+          POSTGRES_PASSWORD: blackjack
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U blackjack -d blackjack"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Run DB migrations
+        env:
+          DATABASE_URL: postgres://blackjack:blackjack@localhost:5432/blackjack?sslmode=disable
+        run: go run ./migrations
+
+      - name: Start backend
+        env:
+          DATABASE_URL: postgres://blackjack:blackjack@localhost:5432/blackjack?sslmode=disable
+          REDIS_ADDR: localhost:6379
+          COOKIE_SECURE: "false"
+        run: |
+          go run . > /tmp/backend.log 2>&1 &
+          echo $! > /tmp/backend.pid
+          for i in {1..30}; do
+            if curl -fsS http://localhost:8080/health >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "backend did not become healthy"
+          cat /tmp/backend.log
+          exit 1
+
+      - name: Integration flow (auth/room/start/hit/stand/reconnect)
+        run: |
+          set -euo pipefail
+          BASE="http://localhost:8080/api"
+          USER="ci_$(date +%s)"
+          PASS="password12"
+          RESP=$(curl -s -c cookies.txt -b cookies.txt -H "Content-Type: application/json" \
+            -d "{\"username\":\"$USER\",\"password\":\"$PASS\"}" "$BASE/auth/signup")
+          CSRF=$(echo "$RESP" | jq -r '.data.csrf_token')
+          test -n "$CSRF" && test "$CSRF" != "null"
+
+          ROOM_RESP=$(curl -s -c cookies.txt -b cookies.txt -H "X-CSRF-Token: $CSRF" -X POST "$BASE/rooms")
+          ROOM_ID=$(echo "$ROOM_RESP" | jq -r '.data.room.id')
+          test -n "$ROOM_ID" && test "$ROOM_ID" != "null"
+
+          curl -s -c cookies.txt -b cookies.txt -H "X-CSRF-Token: $CSRF" -X POST "$BASE/rooms/$ROOM_ID/join" | jq -e '.success == true' >/dev/null
+          curl -s -c cookies.txt -b cookies.txt -H "X-CSRF-Token: $CSRF" -X POST "$BASE/rooms/$ROOM_ID/start" | jq -e '.success == true' >/dev/null
+
+          VER=$(curl -s -c cookies.txt -b cookies.txt "$BASE/rooms/$ROOM_ID" | jq -r '.data.session.version')
+          AID1="hit-$(date +%s)-$RANDOM"
+          curl -s -c cookies.txt -b cookies.txt -H "Content-Type: application/json" -H "X-CSRF-Token: $CSRF" \
+            -d "{\"expected_version\":$VER,\"action_id\":\"$AID1\"}" -X POST "$BASE/rooms/$ROOM_ID/hit" \
+            | jq -e '.success == true or .error.code == "invalid_game_state"' >/dev/null
+
+          VER2=$(curl -s -c cookies.txt -b cookies.txt "$BASE/rooms/$ROOM_ID" | jq -r '.data.session.version')
+          AID2="stand-$(date +%s)-$RANDOM"
+          curl -s -c cookies.txt -b cookies.txt -H "Content-Type: application/json" -H "X-CSRF-Token: $CSRF" \
+            -d "{\"expected_version\":$VER2,\"action_id\":\"$AID2\"}" -X POST "$BASE/rooms/$ROOM_ID/stand" \
+            | jq -e '.success == true or .error.code == "invalid_game_state"' >/dev/null
+
+          curl -s -c cookies.txt -b cookies.txt "$BASE/rooms/$ROOM_ID" | jq -e '.success == true' >/dev/null
+
+      - name: Stop backend
+        if: always()
+        run: |
+          if [ -f /tmp/backend.pid ]; then
+            kill "$(cat /tmp/backend.pid)" || true
+          fi
+          cat /tmp/backend.log || true
+
+  container-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build backend image
+        run: docker build -t blackjack-backend:ci ./backend
+
+  security:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: gosec
+        run: go run github.com/securego/gosec/v2/cmd/gosec@v2.22.3 -fmt text ./...
+
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: npm audit (frontend)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm audit --audit-level=high
+
+  deploy-vercel:
+    runs-on: ubuntu-latest
+    needs: [backend, frontend, integration, container-build, security]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.VERCEL_TOKEN != '' && secrets.VERCEL_PROJECT_ID != '' && secrets.VERCEL_ORG_ID != ''
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install Vercel CLI
+        run: npm i -g vercel@latest
+      - name: Pull Vercel environment
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      - name: Build Vercel artifacts
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      - name: Deploy to Vercel
+        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}

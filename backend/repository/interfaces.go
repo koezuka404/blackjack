@@ -14,6 +14,7 @@ type RoomRepository interface {
 	ListRoomsByUserID(ctx context.Context, userID string) ([]*model.Room, error)
 	// DeleteRoomPlayersByRoomID removes all rows in room_players for the room (debug reset / admin).
 	DeleteRoomPlayersByRoomID(ctx context.Context, roomID string) error
+	CountRooms(ctx context.Context) (int64, error)
 }
 
 type GameSessionRepository interface {
@@ -30,6 +31,7 @@ type GameSessionRepository interface {
 	ListSessionsByStatus(ctx context.Context, status model.SessionStatus) ([]*model.GameSession, error)
 	// DeleteGameSessionsByRoomID removes all game_sessions (and cascaded children) for the room.
 	DeleteGameSessionsByRoomID(ctx context.Context, roomID string) error
+	CountSessions(ctx context.Context) (int64, error)
 }
 
 type RoomPlayerRepository interface {

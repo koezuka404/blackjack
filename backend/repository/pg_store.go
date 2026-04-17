@@ -77,6 +77,12 @@ func (s *pgStore) DeleteRoomPlayersByRoomID(ctx context.Context, roomID string) 
 	return s.db.WithContext(ctx).Where("room_id = ?", roomID).Delete(&RoomPlayerRecord{}).Error
 }
 
+func (s *pgStore) CountRooms(ctx context.Context) (int64, error) {
+	var n int64
+	err := s.db.WithContext(ctx).Model(&RoomRecord{}).Count(&n).Error
+	return n, err
+}
+
 func (s *pgStore) UpdateSessionIfVersion(ctx context.Context, session *model.GameSession, expectedVersion int64) (bool, error) {
 	row, err := gameSessionRecordFromDomain(session)
 	if err != nil {
@@ -233,6 +239,12 @@ func (s *pgStore) ListSessionsByStatus(ctx context.Context, status model.Session
 		out = append(out, item)
 	}
 	return out, nil
+}
+
+func (s *pgStore) CountSessions(ctx context.Context) (int64, error) {
+	var n int64
+	err := s.db.WithContext(ctx).Model(&GameSessionRecord{}).Count(&n).Error
+	return n, err
 }
 
 func (s *pgStore) DeleteGameSessionsByRoomID(ctx context.Context, roomID string) error {

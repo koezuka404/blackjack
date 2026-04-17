@@ -8,6 +8,8 @@ import (
 	"blackjack/backend/dto"
 	"blackjack/backend/middleware"
 	"blackjack/backend/model"
+	"blackjack/backend/observability"
+	"blackjack/backend/realtime"
 	"blackjack/backend/repository"
 	"blackjack/backend/usecase"
 
@@ -15,13 +17,14 @@ import (
 )
 
 type RoomController struct {
-	room    usecase.RoomUsecase
-	limiter middleware.RateLimiter
+	room       usecase.RoomUsecase
+	limiter    middleware.RateLimiter
+	syncBroker *realtime.RoomSyncBroker
 }
 
 // NewRoomController はルーム API / WS 用コントローラを生成する。
-func NewRoomController(room usecase.RoomUsecase, limiter middleware.RateLimiter) *RoomController {
-	return &RoomController{room: room, limiter: limiter}
+func NewRoomController(room usecase.RoomUsecase, limiter middleware.RateLimiter, syncBroker *realtime.RoomSyncBroker) *RoomController {
+	return &RoomController{room: room, limiter: limiter, syncBroker: syncBroker}
 }
 
 // Register は HTTP のルーム系ルートを登録する（HIT/STAND 等）。
@@ -32,6 +35,7 @@ func (r *RoomController) Register(g *echo.Group) {
 	g.POST("/rooms/:id/leave", r.LeaveRoom)
 	g.GET("/rooms/:id", r.GetRoom)
 	g.GET("/rooms/:id/history", r.GetRoomHistory)
+	g.GET("/rooms/:id/play_hint", r.GetPlayHint)
 	g.POST("/rooms/:id/start", r.StartRoom)
 	g.POST("/rooms/:id/hit", r.Hit)
 	g.POST("/rooms/:id/stand", r.Stand)
@@ -78,6 +82,10 @@ func (r *RoomController) JoinRoom(c echo.Context) error {
 			return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
 		}
 	}
+	if room.CurrentSessionID != nil {
+		sid := *room.CurrentSessionID
+		middleware.SetAuditGameSessionID(c, &sid)
+	}
 	r.broadcastRoomState(c.Request().Context(), room.ID, userID, "ROOM_STATE_SYNC")
 	return c.JSON(http.StatusOK, dto.OK(dto.CreateRoomData{
 		Room: dto.RoomDetailJSON{
@@ -92,7 +100,7 @@ func (r *RoomController) JoinRoom(c echo.Context) error {
 func (r *RoomController) LeaveRoom(c echo.Context) error {
 	userID, _ := c.Get("user_id").(string)
 	roomID := c.Param("id")
-	room, err := r.room.LeaveRoom(c.Request().Context(), roomID, userID)
+	room, transfer, err := r.room.LeaveRoom(c.Request().Context(), roomID, userID)
 	if err != nil {
 		switch err {
 		case usecase.ErrUnauthorizedUser:
@@ -106,6 +114,13 @@ func (r *RoomController) LeaveRoom(c echo.Context) error {
 		default:
 			return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
 		}
+	}
+	if transfer != nil {
+		middleware.SetAuditExtra(c, map[string]any{
+			"audit_event":           "HOST_TRANSFER",
+			"previous_host_user_id": transfer.PreviousHostUserID,
+			"new_host_user_id":      transfer.NewHostUserID,
+		})
 	}
 	r.broadcastRoomState(c.Request().Context(), room.ID, userID, "ROOM_STATE_SYNC")
 	return c.JSON(http.StatusOK, dto.OK(dto.CreateRoomData{
@@ -144,6 +159,8 @@ func (r *RoomController) GetRoom(c echo.Context) error {
 		},
 	}
 	if sess != nil {
+		sid := sess.ID
+		middleware.SetAuditGameSessionID(c, &sid)
 		s := dto.SessionFromDomain(sess, func(t time.Time) string {
 			return t.UTC().Format(time.RFC3339)
 		})
@@ -171,6 +188,34 @@ func (r *RoomController) ListRooms(c echo.Context) error {
 		})
 	}
 	return c.JSON(http.StatusOK, dto.OK(dto.ListRoomsData{Rooms: items}))
+}
+
+// GetPlayHint は中級者向けヒューリスティックによる HIT/STAND 推奨（プレイヤーターン・操作可能時のみ）。
+func (r *RoomController) GetPlayHint(c echo.Context) error {
+	userID, _ := c.Get("user_id").(string)
+	roomID := c.Param("id")
+	hint, err := r.room.SuggestPlayerAction(c.Request().Context(), roomID, userID)
+	if err != nil {
+		switch err {
+		case usecase.ErrUnauthorizedUser:
+			return c.JSON(http.StatusUnauthorized, dto.Fail("unauthorized", "login required"))
+		case usecase.ErrForbiddenAction:
+			return c.JSON(http.StatusForbidden, dto.Fail("forbidden", "room access denied"))
+		case usecase.ErrInvalidInput:
+			return c.JSON(http.StatusBadRequest, dto.Fail("invalid_input", "room id is required"))
+		case usecase.ErrInvalidGameState:
+			return c.JSON(http.StatusConflict, dto.Fail("invalid_game_state", "hint is only available on your turn when you can hit"))
+		case repository.ErrNotFound:
+			return c.JSON(http.StatusNotFound, dto.Fail("not_found", "room or session not found"))
+		default:
+			return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
+		}
+	}
+	return c.JSON(http.StatusOK, dto.OK(dto.PlayHintData{
+		Recommendation: hint.Recommendation,
+		SessionVersion: hint.SessionVersion,
+		Rationale:      hint.Rationale,
+	}))
 }
 
 // GetRoomHistory は round_logs 由来の履歴取得。
@@ -224,6 +269,8 @@ func (r *RoomController) StartRoom(c echo.Context) error {
 		}
 	}
 	middleware.SetAuditSessionVersions(c, nil, &sess.Version)
+	sid := sess.ID
+	middleware.SetAuditGameSessionID(c, &sid)
 	r.broadcastRoomState(c.Request().Context(), room.ID, userID, "ROOM_STATE_SYNC")
 	return c.JSON(http.StatusOK, dto.OK(dto.StartRoomData{
 		Room: dto.RoomDetailJSON{
@@ -301,8 +348,10 @@ func (r *RoomController) RematchVote(c echo.Context) error {
 		case usecase.ErrInvalidGameState:
 			return c.JSON(http.StatusConflict, dto.Fail("invalid_game_state", "rematch voting is unavailable"))
 		case model.ErrVersionConflict:
+			observability.IncVersionConflict()
 			return c.JSON(http.StatusConflict, dto.Fail("version_conflict", "session version conflict"))
 		case model.ErrDuplicateAction:
+			observability.IncDuplicateAction()
 			return c.JSON(http.StatusConflict, dto.Fail("duplicate_action", "action id already used with different payload"))
 		case repository.ErrNotFound:
 			return c.JSON(http.StatusNotFound, dto.Fail("not_found", "room or session not found"))
@@ -311,6 +360,8 @@ func (r *RoomController) RematchVote(c echo.Context) error {
 		}
 	}
 	middleware.SetAuditSessionVersions(c, &req.ExpectedVersion, &sess.Version)
+	sid := sess.ID
+	middleware.SetAuditGameSessionID(c, &sid)
 	r.broadcastRoomState(c.Request().Context(), room.ID, userID, "ROOM_STATE_SYNC")
 	return c.JSON(http.StatusOK, dto.OK(dto.TurnActionData{
 		Room: dto.RoomDetailJSON{
@@ -358,8 +409,10 @@ func (r *RoomController) turnAction(c echo.Context, hit bool) error {
 		case usecase.ErrInvalidGameState, model.ErrNotPlayerTurn, model.ErrNotYourTurn, model.ErrInvalidPlayerStatus:
 			return c.JSON(http.StatusConflict, dto.Fail("invalid_game_state", err.Error()))
 		case model.ErrVersionConflict:
+			observability.IncVersionConflict()
 			return c.JSON(http.StatusConflict, dto.Fail("version_conflict", "session version conflict"))
 		case model.ErrDuplicateAction:
+			observability.IncDuplicateAction()
 			return c.JSON(http.StatusConflict, dto.Fail("duplicate_action", "action id already used with different payload"))
 		case repository.ErrNotFound:
 			return c.JSON(http.StatusNotFound, dto.Fail("not_found", "room or session not found"))
@@ -368,6 +421,8 @@ func (r *RoomController) turnAction(c echo.Context, hit bool) error {
 		}
 	}
 	middleware.SetAuditSessionVersions(c, &req.ExpectedVersion, &sess.Version)
+	sid := sess.ID
+	middleware.SetAuditGameSessionID(c, &sid)
 	r.broadcastRoomState(c.Request().Context(), room.ID, userID, "ROOM_STATE_SYNC")
 	return c.JSON(http.StatusOK, dto.OK(dto.TurnActionData{
 		Room: dto.RoomDetailJSON{

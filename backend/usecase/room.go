@@ -8,11 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"math/big"
+	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"blackjack/backend/model"
+	"blackjack/backend/observability"
 	"blackjack/backend/repository"
 
 	"github.com/google/uuid"
@@ -24,6 +27,13 @@ var ErrForbiddenAction = errors.New("forbidden")
 
 const PlayerTurnTimeout = 15 * time.Second
 
+// HostTransfer は卓ホスト移譲が発生したときの監査用メタデータ（仕様 12.7 / 監査 20.4）。
+type HostTransfer struct {
+	RoomID             string
+	PreviousHostUserID string
+	NewHostUserID      string
+}
+
 type RoomUsecase interface {
 	CreateRoom(ctx context.Context, hostUserID string) (*model.Room, error)
 	JoinRoom(ctx context.Context, roomID, userID string) (*model.Room, error)
@@ -31,7 +41,7 @@ type RoomUsecase interface {
 	GetRoomState(ctx context.Context, roomID, userID string) (*RoomState, error)
 	ListRooms(ctx context.Context, userID string) ([]*model.Room, error)
 	GetRoomHistory(ctx context.Context, roomID, userID string) ([]*model.RoundLog, error)
-	LeaveRoom(ctx context.Context, roomID, userID string) (*model.Room, error)
+	LeaveRoom(ctx context.Context, roomID, userID string) (*model.Room, *HostTransfer, error)
 	StartRoom(ctx context.Context, roomID, userID string) (*model.Room, *model.GameSession, error)
 	Hit(ctx context.Context, roomID, userID string, expectedVersion int64, actionID string) (*model.Room, *model.GameSession, error)
 	Stand(ctx context.Context, roomID, userID string, expectedVersion int64, actionID string) (*model.Room, *model.GameSession, error)
@@ -39,6 +49,7 @@ type RoomUsecase interface {
 	MarkConnected(ctx context.Context, roomID, userID string) error
 	MarkDisconnected(ctx context.Context, roomID, userID string) error
 	AutoStandDueSessions(ctx context.Context) ([]string, error)
+	SuggestPlayerAction(ctx context.Context, roomID, userID string) (*PlayHint, error)
 	// ResetRoomForDebug は開発用に卓を初期状態へ戻す（§15.3）。本番無効化は Controller 側。
 	ResetRoomForDebug(ctx context.Context, roomID, userID string) (*model.Room, error)
 }
@@ -51,6 +62,13 @@ type RoomState struct {
 	CanHit     bool
 	CanStand   bool
 	CanRematch bool
+}
+
+// PlayHint は中級者向けヒューリスティックによる推奨手と説明。
+type PlayHint struct {
+	Recommendation string
+	SessionVersion int64
+	Rationale      string
 }
 
 type roomService struct {
@@ -195,31 +213,32 @@ func (u *roomService) ListRooms(ctx context.Context, userID string) ([]*model.Ro
 }
 
 // LeaveRoom は参加者が卓から離脱し、ルーム状態を更新する。
-func (u *roomService) LeaveRoom(ctx context.Context, roomID, userID string) (*model.Room, error) {
+func (u *roomService) LeaveRoom(ctx context.Context, roomID, userID string) (*model.Room, *HostTransfer, error) {
 	if userID == "" {
-		return nil, ErrUnauthorizedUser
+		return nil, nil, ErrUnauthorizedUser
 	}
 	if roomID == "" {
-		return nil, ErrInvalidInput
+		return nil, nil, ErrInvalidInput
 	}
 	room, err := u.store.GetRoom(ctx, roomID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if room.CurrentSessionID != nil {
-		return nil, ErrInvalidGameState
+		return nil, nil, ErrInvalidGameState
 	}
 	p, err := u.store.GetRoomPlayer(ctx, roomID, userID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if p.Status == model.RoomPlayerLeft {
-		return room, nil
+		return room, nil, nil
 	}
 	players, err := u.store.ListRoomPlayersByRoomID(ctx, roomID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	var transfer *HostTransfer
 	now := time.Now().UTC()
 	p.MarkLeft(now)
 	activeAfterLeave := 0
@@ -234,11 +253,16 @@ func (u *roomService) LeaveRoom(ctx context.Context, roomID, userID string) (*mo
 	// 仕様 §12.7: host が LEFT の場合は最小 seat の有効参加者へ委譲する。
 	if room.HostUserID == userID {
 		if nextHost := selectNextHost(players, userID); nextHost != nil {
+			transfer = &HostTransfer{
+				RoomID:             roomID,
+				PreviousHostUserID: userID,
+				NewHostUserID:      nextHost.UserID,
+			}
 			room.HostUserID = nextHost.UserID
 		}
 	}
 	if err := room.RecalculateStatus(activeAfterLeave, false); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	room.Touch(now)
 	if err := u.store.Transaction(ctx, func(tx repository.Store) error {
@@ -247,9 +271,9 @@ func (u *roomService) LeaveRoom(ctx context.Context, roomID, userID string) (*mo
 		}
 		return tx.UpdateRoom(ctx, room)
 	}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return room, nil
+	return room, transfer, nil
 }
 
 func selectNextHost(players []*model.RoomPlayer, leavingUserID string) *model.RoomPlayer {
@@ -621,6 +645,44 @@ func (u *roomService) GetRoomState(ctx context.Context, roomID, userID string) (
 	}
 	state.CanRematch = sess.Status == model.SessionStatusResetting
 	return state, nil
+}
+
+// SuggestPlayerAction は現在局面での HIT/STAND 推奨を返す（プレイヤーターンでヒット可能なときのみ）。
+func (u *roomService) SuggestPlayerAction(ctx context.Context, roomID, userID string) (*PlayHint, error) {
+	state, err := u.GetRoomState(ctx, roomID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if state.Session == nil || !state.CanHit {
+		return nil, ErrInvalidGameState
+	}
+	if state.Dealer == nil || len(state.Dealer.Hand) == 0 {
+		return nil, ErrInvalidGameState
+	}
+	var hand []model.StoredCard
+	for _, p := range state.Players {
+		if p.UserID == userID {
+			hand = p.Hand
+			break
+		}
+	}
+	if len(hand) == 0 {
+		return nil, ErrInvalidGameState
+	}
+	up := state.Dealer.Hand[0]
+	// 推奨は純粋関数で計算し、ここでは結果をレスポンス用に整形するだけ。
+	wantHit := model.RecommendHitOrStand(u.evaluator, hand, up)
+	rec := "STAND"
+	rationale := "中級向け簡略ベーシック戦略（S17・ダブル/スプリットなし）に基づきスタンド。"
+	if wantHit {
+		rec = "HIT"
+		rationale = "中級向け簡略ベーシック戦略（S17・ダブル/スプリットなし）に基づきヒット。"
+	}
+	return &PlayHint{
+		Recommendation: rec,
+		SessionVersion: state.Session.Version,
+		Rationale:      rationale,
+	}, nil
 }
 
 // rematchEligibleUserIDs は再戦投票の対象となる人間プレイヤー user_id を返す（§12.1）。
@@ -1112,6 +1174,14 @@ func (u *roomService) autoStandOne(ctx context.Context, sessionID string) error 
 	if err != nil {
 		return err
 	}
+	if strings.TrimSpace(os.Getenv("BLACKJACK_PLAYER_TIMEOUT_POLICY")) == "heuristic" && len(dealer.Hand) > 0 {
+		if model.RecommendHitOrStand(u.evaluator, player.Hand, dealer.Hand[0]) {
+			// 通常の Hit ユースケースを通して version/冪等ルールを再利用する。
+			actionID := "auto-heuristic-hit:" + sessionID + ":" + strconv.FormatInt(sess.Version, 10)
+			_, _, err := u.Hit(ctx, room.ID, player.UserID, sess.Version, actionID)
+			return err
+		}
+	}
 	now := time.Now().UTC()
 	if err := player.SetStatus(model.PlayerStatusStand); err != nil {
 		return err
@@ -1138,7 +1208,7 @@ func (u *roomService) autoStandOne(ctx context.Context, sessionID string) error 
 		RequestType:        "AUTO_STAND",
 		RequestPayloadHash: hex.EncodeToString(hash[:]),
 	}
-	return u.store.Transaction(ctx, func(tx repository.Store) error {
+	err = u.store.Transaction(ctx, func(tx repository.Store) error {
 		ok, err := tx.UpdateSessionIfVersion(ctx, sess, sess.Version-1)
 		if err != nil {
 			return err
@@ -1165,6 +1235,10 @@ func (u *roomService) autoStandOne(ctx context.Context, sessionID string) error 
 		}
 		return SaveActionSuccessSnapshot(ctx, tx, actionLog, string(snapshotBytes))
 	})
+	if err == nil {
+		observability.IncAutoStand()
+	}
+	return err
 }
 
 // advanceDealerOneStep はディーラーターンを1手進める（1ドロー or 結果確定）。
@@ -1194,6 +1268,7 @@ func (u *roomService) advanceDealerOneStep(ctx context.Context, sessionID string
 	}
 	now := time.Now().UTC()
 	action, terminal := model.NextDealerAction(u.evaluator, dealer.Hand)
+	didDraw := !(terminal || action == model.DealerActionStand)
 	sessPrev := sess.Version
 	var roundLog *model.RoundLog
 	if terminal || action == model.DealerActionStand {
@@ -1219,7 +1294,7 @@ func (u *roomService) advanceDealerOneStep(ctx context.Context, sessionID string
 	}
 	sess.IncrementVersion()
 	sess.Touch(now)
-	return u.store.Transaction(ctx, func(tx repository.Store) error {
+	err = u.store.Transaction(ctx, func(tx repository.Store) error {
 		ok, err := tx.UpdateSessionIfVersion(ctx, sess, sessPrev)
 		if err != nil {
 			return err
@@ -1243,6 +1318,10 @@ func (u *roomService) advanceDealerOneStep(ctx context.Context, sessionID string
 		}
 		return nil
 	})
+	if err == nil && didDraw {
+		observability.IncDealerDraw()
+	}
+	return err
 }
 
 // newShuffledDeck は52枚の山札を生成してシャッフルする。

@@ -1,5 +1,8 @@
 // 運用関連の環境変数: PORT（既定 8080）, WS_ALLOWED_ORIGINS（カンマ区切り・空なら WS Origin 許可は開発モード）,
-// BLACKJACK_WS_MARK_DISCONNECTED（true/false・WS 切断時に DISCONNECTED を DB 反映するか、既定 true）。
+// BLACKJACK_WS_MARK_DISCONNECTED（true/false・WS 切断時に DISCONNECTED を DB 反映するか、既定 true）,
+// WS_CONNECTION_EPOCH_TTL（例: 120s。複数インスタンス用 connection_epoch TTL、既定 120s）,
+// SERVER_ID（複数インスタンス時の Pub/Sub 重複防止用。未設定は起動ごとに UUID）,
+// BLACKJACK_PLAYER_TIMEOUT_POLICY（空または未設定: タイムアウトは自動スタンド。heuristic: 中級向けヒューリスティックでヒット可能なら Hit を試みる）。
 package main
 
 import (
@@ -17,14 +20,18 @@ import (
 	"blackjack/backend/controller"
 	"blackjack/backend/db"
 	"blackjack/backend/middleware"
+	"blackjack/backend/observability"
+	"blackjack/backend/realtime"
 	"blackjack/backend/repository"
 	"blackjack/backend/router"
 	"blackjack/backend/usecase"
 
 	_ "github.com/ethanefung/blackjack"
 	_ "github.com/ethanefung/cards"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
@@ -53,15 +60,34 @@ func main() {
 	authUC := usecase.NewAuthUsecase(store)
 	roomUC := usecase.NewRoomUsecase(store, blackjackadapter.NewHandEvaluator(), blackjackadapter.NewRoundEngine())
 
+	serverID := strings.TrimSpace(os.Getenv("SERVER_ID"))
+	if serverID == "" {
+		serverID = uuid.NewString()
+	}
+	roomSyncBroker := realtime.NewRoomSyncBroker(rdb, serverID)
+	roomSyncCtx, roomSyncCancel := context.WithCancel(context.Background())
+
 	controller.ConfigureWebSocketAllowedOrigins(parseWSAllowedOrigins())
+	controller.ConfigureWebSocketConnectionEpochStore(rdb, parseWSConnectionEpochTTL())
 
 	e := echo.New()
-	roomController := router.Register(e, store, limiter, authUC, roomUC)
+	roomController := router.Register(e, store, limiter, authUC, roomUC, roomSyncBroker)
+
+	go func() {
+		err := roomSyncBroker.RunSubscriber(roomSyncCtx, func(ctx context.Context, roomID, eventType string) {
+			roomController.BroadcastRoomStateFromPeer(ctx, roomID, eventType)
+		})
+		if err != nil && !errors.Is(err, context.Canceled) {
+			e.Logger.Errorf("room sync subscriber: %v", err)
+		}
+	}()
 
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	go runAutoStandWorker(workerCtx, e, roomUC, roomController)
+	go runSnapshotMetricsWorker(workerCtx, e, store)
 
 	e.GET("/health", healthHandler(gdb, rdb))
+	e.GET("/metrics", echo.WrapHandler(promhttp.Handler()))
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -79,6 +105,7 @@ func main() {
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 	<-quit
 
+	roomSyncCancel()
 	workerCancel()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -117,6 +144,18 @@ func parseWSAllowedOrigins() []string {
 	return out
 }
 
+func parseWSConnectionEpochTTL() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("WS_CONNECTION_EPOCH_TTL"))
+	if raw == "" {
+		return 2 * time.Minute
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return 2 * time.Minute
+	}
+	return d
+}
+
 func runAutoStandWorker(ctx context.Context, e *echo.Echo, roomUC usecase.RoomUsecase, roomController *controller.RoomController) {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
@@ -135,6 +174,34 @@ func runAutoStandWorker(ctx context.Context, e *echo.Echo, roomUC usecase.RoomUs
 			for _, roomID := range roomIDs {
 				roomController.BroadcastRoomSync(ctx, roomID)
 			}
+		}
+	}
+}
+
+func runSnapshotMetricsWorker(ctx context.Context, e *echo.Echo, store repository.Store) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			rooms, err := store.CountRooms(ctx)
+			if err != nil {
+				if !errors.Is(err, context.Canceled) {
+					e.Logger.Errorf("metrics room count error: %v", err)
+				}
+				continue
+			}
+			sessions, err := store.CountSessions(ctx)
+			if err != nil {
+				if !errors.Is(err, context.Canceled) {
+					e.Logger.Errorf("metrics session count error: %v", err)
+				}
+				continue
+			}
+			observability.SetRoomCount(float64(rooms))
+			observability.SetSessionCount(float64(sessions))
 		}
 	}
 }

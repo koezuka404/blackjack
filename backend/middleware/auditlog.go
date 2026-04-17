@@ -19,12 +19,45 @@ const ActionIDContextKey = "audit_action_id"
 const (
 	AuditSessionVersionBeforeKey = "audit_session_version_before"
 	AuditSessionVersionAfterKey  = "audit_session_version_after"
+	// AuditGameSessionIDKey は *string。nil のとき game_session_id は JSON null。
+	AuditGameSessionIDKey = "audit_game_session_id"
+	// AuditExtraKey は map[string]any。BuildEntry にマージする（HOST_TRANSFER 等）。
+	AuditExtraKey = "audit_extra"
 )
 
 // SetAuditSessionVersions は HTTP ハンドラが session_version_before / after を監査ログへ反映するために呼ぶ。
 func SetAuditSessionVersions(c echo.Context, before, after *int64) {
 	c.Set(AuditSessionVersionBeforeKey, before)
 	c.Set(AuditSessionVersionAfterKey, after)
+}
+
+// SetAuditGameSessionID は監査ログの game_session_id（仕様 20.1）を設定する。未設定は null。
+func SetAuditGameSessionID(c echo.Context, id *string) {
+	c.Set(AuditGameSessionIDKey, id)
+}
+
+// SetAuditExtra は BuildEntry へマージする追加フィールドを設定する（上書き）。
+func SetAuditExtra(c echo.Context, extra map[string]any) {
+	if len(extra) == 0 {
+		return
+	}
+	c.Set(AuditExtraKey, extra)
+}
+
+func auditGameSessionIDFromContext(c echo.Context) any {
+	v, ok := c.Get(AuditGameSessionIDKey).(*string)
+	if !ok || v == nil {
+		return nil
+	}
+	return *v
+}
+
+func auditExtraFromContext(c echo.Context) map[string]any {
+	v, ok := c.Get(AuditExtraKey).(map[string]any)
+	if !ok || v == nil {
+		return nil
+	}
+	return v
 }
 
 func RequestIDMiddleware() echo.MiddlewareFunc {
@@ -80,6 +113,7 @@ func AuditLogMiddleware() echo.MiddlewareFunc {
 				resolveActionID(c),
 				c.Param("id"),
 				c.Get("session_id"),
+				auditGameSessionIDFromContext(c),
 				userID,
 				"USER",
 				c.Request().Method+" "+c.Path(),
@@ -88,6 +122,7 @@ func AuditLogMiddleware() echo.MiddlewareFunc {
 				latency,
 				result,
 				errorCode,
+				auditExtraFromContext(c),
 			)
 			auditlog.Info(c.Logger(), entry)
 			return err

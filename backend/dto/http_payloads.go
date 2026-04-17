@@ -44,6 +44,13 @@ type RoomHistoryData struct {
 	Items  []RoomHistoryItemJSON `json:"items"`
 }
 
+// PlayHintData は中級者向けヒューリスティックの HIT/STAND 推奨。
+type PlayHintData struct {
+	Recommendation string `json:"recommendation"`
+	SessionVersion int64  `json:"session_version"`
+	Rationale      string `json:"rationale"`
+}
+
 func RoomHistoryItemFromDomain(itemID string, roundNo int, resultPayload string, createdAt time.Time) RoomHistoryItemJSON {
 	return RoomHistoryItemJSON{
 		SessionID:     itemID,
