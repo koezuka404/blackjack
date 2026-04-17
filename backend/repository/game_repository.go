@@ -46,43 +46,6 @@ func mapErr(err error) error {
 
 var _ Store = (*pgStore)(nil)
 
-func (s *pgStore) CreateUser(ctx context.Context, user *model.User) error {
-	row, err := userRecordFromDomain(user)
-	if err != nil {
-		return err
-	}
-	if err := s.db.WithContext(ctx).Create(row).Error; err != nil {
-		return mapErr(err)
-	}
-	return nil
-}
-
-func (s *pgStore) CreateRoom(ctx context.Context, room *model.Room) error {
-	row, err := roomRecordFromDomain(room)
-	if err != nil {
-		return err
-	}
-	return s.db.WithContext(ctx).Create(row).Error
-}
-
-func (s *pgStore) UpdateRoom(ctx context.Context, room *model.Room) error {
-	row, err := roomRecordFromDomain(room)
-	if err != nil {
-		return err
-	}
-	return s.db.WithContext(ctx).Save(row).Error
-}
-
-func (s *pgStore) DeleteRoomPlayersByRoomID(ctx context.Context, roomID string) error {
-	return s.db.WithContext(ctx).Where("room_id = ?", roomID).Delete(&RoomPlayerRecord{}).Error
-}
-
-func (s *pgStore) CountRooms(ctx context.Context) (int64, error) {
-	var n int64
-	err := s.db.WithContext(ctx).Model(&RoomRecord{}).Count(&n).Error
-	return n, err
-}
-
 func (s *pgStore) UpdateSessionIfVersion(ctx context.Context, session *model.GameSession, expectedVersion int64) (bool, error) {
 	row, err := gameSessionRecordFromDomain(session)
 	if err != nil {
@@ -106,33 +69,6 @@ func (s *pgStore) UpdateSessionIfVersion(ctx context.Context, session *model.Gam
 		return false, tx.Error
 	}
 	return tx.RowsAffected == 1, nil
-}
-
-func (s *pgStore) GetRoom(ctx context.Context, id string) (*model.Room, error) {
-	var rec RoomRecord
-	if err := s.db.WithContext(ctx).First(&rec, "id = ?", id).Error; err != nil {
-		return nil, mapErr(err)
-	}
-	return roomRecordToDomain(&rec)
-}
-
-func (s *pgStore) ListRoomsByUserID(ctx context.Context, userID string) ([]*model.Room, error) {
-	var rows []RoomRecord
-	if err := s.db.WithContext(ctx).
-		Where("host_user_id = ?", userID).
-		Order("created_at DESC").
-		Find(&rows).Error; err != nil {
-		return nil, mapErr(err)
-	}
-	out := make([]*model.Room, 0, len(rows))
-	for i := range rows {
-		item, err := roomRecordToDomain(&rows[i])
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, item)
-	}
-	return out, nil
 }
 
 func (s *pgStore) CreateSession(ctx context.Context, session *model.GameSession) error {
@@ -251,49 +187,6 @@ func (s *pgStore) DeleteGameSessionsByRoomID(ctx context.Context, roomID string)
 	return s.db.WithContext(ctx).Where("room_id = ?", roomID).Delete(&GameSessionRecord{}).Error
 }
 
-func (s *pgStore) CreateRoomPlayer(ctx context.Context, p *model.RoomPlayer) error {
-	row, err := roomPlayerRecordFromDomain(p)
-	if err != nil {
-		return err
-	}
-	return s.db.WithContext(ctx).Create(row).Error
-}
-
-func (s *pgStore) UpdateRoomPlayer(ctx context.Context, p *model.RoomPlayer) error {
-	row, err := roomPlayerRecordFromDomain(p)
-	if err != nil {
-		return err
-	}
-	return s.db.WithContext(ctx).Save(row).Error
-}
-
-func (s *pgStore) GetRoomPlayer(ctx context.Context, roomID, userID string) (*model.RoomPlayer, error) {
-	var rec RoomPlayerRecord
-	err := s.db.WithContext(ctx).
-		Where("room_id = ? AND user_id = ?", roomID, userID).
-		First(&rec).Error
-	if err != nil {
-		return nil, mapErr(err)
-	}
-	return roomPlayerRecordToDomain(&rec)
-}
-
-func (s *pgStore) ListRoomPlayersByRoomID(ctx context.Context, roomID string) ([]*model.RoomPlayer, error) {
-	var rows []RoomPlayerRecord
-	if err := s.db.WithContext(ctx).Where("room_id = ?", roomID).Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	out := make([]*model.RoomPlayer, 0, len(rows))
-	for i := range rows {
-		d, err := roomPlayerRecordToDomain(&rows[i])
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, d)
-	}
-	return out, nil
-}
-
 func (s *pgStore) CreatePlayerState(ctx context.Context, p *model.PlayerState) error {
 	row, err := playerStateRecordFromDomain(p)
 	if err != nil {
@@ -359,52 +252,6 @@ func (s *pgStore) GetDealerState(ctx context.Context, sessionID string) (*model.
 		return nil, mapErr(err)
 	}
 	return dealerStateRecordToDomain(&rec)
-}
-
-func (s *pgStore) GetUserByUsername(ctx context.Context, username string) (*model.User, error) {
-	var rec UserRecord
-	if err := s.db.WithContext(ctx).Where("username = ?", username).First(&rec).Error; err != nil {
-		return nil, mapErr(err)
-	}
-	return userRecordToDomain(&rec)
-}
-
-func (s *pgStore) GetUserByID(ctx context.Context, userID string) (*model.User, error) {
-	var rec UserRecord
-	if err := s.db.WithContext(ctx).First(&rec, "id = ?", userID).Error; err != nil {
-		return nil, mapErr(err)
-	}
-	return userRecordToDomain(&rec)
-}
-
-func (s *pgStore) UpsertSession(ctx context.Context, session *model.Session) error {
-	row, err := authSessionRecordFromDomain(session)
-	if err != nil {
-		return err
-	}
-	return s.db.WithContext(ctx).Save(row).Error
-}
-
-func (s *pgStore) GetAuthSession(ctx context.Context, sessionID string) (*model.Session, error) {
-	var rec SessionRecord
-	if err := s.db.WithContext(ctx).First(&rec, "id = ?", sessionID).Error; err != nil {
-		return nil, mapErr(err)
-	}
-	return authSessionRecordToDomain(&rec)
-}
-
-func (s *pgStore) DeleteSession(ctx context.Context, sessionID string) error {
-	return s.db.WithContext(ctx).Delete(&SessionRecord{}, "id = ?", sessionID).Error
-}
-
-func (s *pgStore) DeleteSessionsByUserID(ctx context.Context, userID string) error {
-	return s.db.WithContext(ctx).Delete(&SessionRecord{}, "user_id = ?", userID).Error
-}
-
-func (s *pgStore) DeleteExpiredSessions(ctx context.Context) error {
-	return s.db.WithContext(ctx).
-		Delete(&SessionRecord{}, "expires_at <= ?", time.Now().UTC()).
-		Error
 }
 
 func (s *pgStore) CreateActionLog(ctx context.Context, actionLog *model.ActionLog) error {

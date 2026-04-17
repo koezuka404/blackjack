@@ -11,10 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"blackjack/backend/auditlog"
 	"blackjack/backend/dto"
 	"blackjack/backend/middleware"
-	"blackjack/backend/model"
 	"blackjack/backend/observability"
 	"blackjack/backend/repository"
 	"blackjack/backend/usecase"
@@ -245,73 +243,7 @@ func (r *RoomController) RoomWS(c echo.Context) error {
 				sendWSError(conn, meta, dto.WSErrorForbidden, "stale websocket connection")
 				return
 			}
-			switch req.Type {
-			case dto.WSEventHit:
-				// 更新系: action_id + expected_version
-				if req.ActionID == "" || req.ExpectedVersion <= 0 {
-					sendWSError(conn, meta, dto.WSErrorInvalidInput, "action_id and expected_version are required")
-					continue
-				}
-				_, sess, err := r.room.Hit(context.Background(), roomID, userID, req.ExpectedVersion, req.ActionID)
-				ev := req.ExpectedVersion
-				if err != nil {
-					code, message := mapWSError(err)
-					logWSEvent(c, req, roomID, userID, nil, &ev, &ev, msgStart, "failure", code, nil)
-					sendWSError(conn, meta, code, message)
-					continue
-				}
-				sv := sess.Version
-				gid := sess.ID
-				logWSEvent(c, req, roomID, userID, &gid, &ev, &sv, msgStart, "success", "", nil)
-				r.broadcastRoomState(context.Background(), roomID, userID, dto.WSEventRoomSync)
-			case dto.WSEventStand:
-				// 更新系: STAND も HIT と同じ検証・整合性フローで処理する
-				if req.ActionID == "" || req.ExpectedVersion <= 0 {
-					sendWSError(conn, meta, dto.WSErrorInvalidInput, "action_id and expected_version are required")
-					continue
-				}
-				_, sess, err := r.room.Stand(context.Background(), roomID, userID, req.ExpectedVersion, req.ActionID)
-				ev := req.ExpectedVersion
-				if err != nil {
-					code, message := mapWSError(err)
-					logWSEvent(c, req, roomID, userID, nil, &ev, &ev, msgStart, "failure", code, nil)
-					sendWSError(conn, meta, code, message)
-					continue
-				}
-				sv := sess.Version
-				gid := sess.ID
-				logWSEvent(c, req, roomID, userID, &gid, &ev, &sv, msgStart, "success", "", nil)
-				r.broadcastRoomState(context.Background(), roomID, userID, dto.WSEventRoomSync)
-			case dto.WSEventRematchVote:
-				// 再戦投票は WS のみ受け付ける（HTTP fallback なし）
-				if req.ActionID == "" || req.ExpectedVersion <= 0 || req.Agree == nil {
-					sendWSError(conn, meta, dto.WSErrorInvalidInput, "agree, action_id and expected_version are required")
-					continue
-				}
-				_, sess, err := r.room.VoteRematch(context.Background(), roomID, userID, *req.Agree, req.ExpectedVersion, req.ActionID)
-				ev := req.ExpectedVersion
-				if err != nil {
-					code, message := mapWSError(err)
-					logWSEvent(c, req, roomID, userID, nil, &ev, &ev, msgStart, "failure", code, nil)
-					sendWSError(conn, meta, code, message)
-					continue
-				}
-				sv := sess.Version
-				gid := sess.ID
-				logWSEvent(c, req, roomID, userID, &gid, &ev, &sv, msgStart, "success", "", nil)
-				r.broadcastRoomState(context.Background(), roomID, userID, dto.WSEventRoomSync)
-			case dto.WSEventRoomSyncReq:
-				// 読み取り系同期要求は version 不一致をエラーにせず、正本を再送する
-				logWSEvent(c, req, roomID, userID, nil, nil, nil, msgStart, "success", "", nil)
-				r.broadcastRoomState(context.Background(), roomID, userID, dto.WSEventRoomSync)
-			case dto.WSEventPing:
-				// 接続が生きているか確認
-				logWSEvent(c, req, roomID, userID, nil, nil, nil, msgStart, "success", "", nil)
-				sendWSPong(conn, meta)
-			default:
-				logWSEvent(c, req, roomID, userID, nil, nil, nil, msgStart, "failure", dto.WSErrorInvalidInput, nil)
-				sendWSError(conn, meta, dto.WSErrorInvalidInput, "unsupported ws event type")
-			}
+			r.handleGameWSAction(c, req, roomID, userID, conn, meta, msgStart)
 		}
 	}()
 	return nil
@@ -393,32 +325,6 @@ func sendWSPong(conn *websocket.Conn, meta wsConnMeta) {
 		return
 	}
 	_ = writeWS(conn, meta, b)
-}
-
-// mapWSError はドメインエラーを WS の code/message に変換する。
-func mapWSError(err error) (string, string) {
-	switch err {
-	case usecase.ErrUnauthorizedUser:
-		return dto.WSErrorUnauthorized, "login required"
-	case usecase.ErrForbiddenAction:
-		return dto.WSErrorForbidden, "room access denied"
-	case usecase.ErrInvalidInput:
-		return dto.WSErrorInvalidInput, "action_id and expected_version are required"
-	case usecase.ErrInvalidGameState, model.ErrNotPlayerTurn, model.ErrNotYourTurn, model.ErrInvalidPlayerStatus:
-		return dto.WSErrorInvalidGame, err.Error()
-	case model.ErrRoomFull:
-		return dto.WSErrorRoomFull, "room is full"
-	case model.ErrVersionConflict:
-		observability.IncVersionConflict()
-		return dto.WSErrorVersionConflict, "session version conflict"
-	case model.ErrDuplicateAction:
-		observability.IncDuplicateAction()
-		return dto.WSErrorDuplicateAction, "action id already used with different payload"
-	case repository.ErrNotFound:
-		return dto.WSErrorNotFound, "room or session not found"
-	default:
-		return dto.WSErrorInternal, err.Error()
-	}
 }
 
 // buildRoomStateSyncDTO は閲覧者ごとの手札公開範囲を反映した同期ペイロードを組み立てる。
@@ -559,35 +465,4 @@ func (h *roomHub) isLatest(roomID, userID string, conn *websocket.Conn) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.latest[roomID+":"+userID] == conn
-}
-
-// logWSEvent は WS メッセージごとの構造化監査ログを出す（HTTP AuditLogMiddleware と同一スキーマ）。
-func logWSEvent(c echo.Context, req dto.WSActionRequest, roomID, userID string, gameSessionID *string, before, after *int64, start time.Time, result, errorCode string, extra map[string]any) {
-	reqID := req.RequestID
-	if reqID == "" {
-		reqID, _ = c.Get(middleware.RequestIDContextKey).(string)
-	}
-	var gs any
-	if gameSessionID != nil {
-		gs = *gameSessionID
-	}
-	entry := auditlog.BuildEntry(
-		start,
-		reqID,
-		req.ActionID,
-		roomID,
-		c.Get("session_id"),
-		gs,
-		userID,
-		"USER",
-		"WS "+req.Type,
-		before,
-		after,
-		time.Since(start).Milliseconds(),
-		result,
-		errorCode,
-		extra,
-	)
-	auditlog.Info(c.Logger(), entry)
-	observability.ObserveWSMessage(req.Type, result, time.Since(start).Seconds())
 }
