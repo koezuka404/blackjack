@@ -53,11 +53,7 @@ func (r *RoomController) CreateRoom(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
 	}
 	return c.JSON(http.StatusOK, dto.OK(dto.CreateRoomData{
-		Room: dto.RoomDetailJSON{
-			ID:         room.ID,
-			HostUserID: room.HostUserID,
-			Status:     string(room.Status),
-		},
+		Room: roomDetailJSON(room),
 	}))
 }
 
@@ -88,11 +84,7 @@ func (r *RoomController) JoinRoom(c echo.Context) error {
 	}
 	r.broadcastRoomState(c.Request().Context(), room.ID, userID, "ROOM_STATE_SYNC")
 	return c.JSON(http.StatusOK, dto.OK(dto.CreateRoomData{
-		Room: dto.RoomDetailJSON{
-			ID:         room.ID,
-			HostUserID: room.HostUserID,
-			Status:     string(room.Status),
-		},
+		Room: roomDetailJSON(room),
 	}))
 }
 
@@ -124,11 +116,7 @@ func (r *RoomController) LeaveRoom(c echo.Context) error {
 	}
 	r.broadcastRoomState(c.Request().Context(), room.ID, userID, "ROOM_STATE_SYNC")
 	return c.JSON(http.StatusOK, dto.OK(dto.CreateRoomData{
-		Room: dto.RoomDetailJSON{
-			ID:         room.ID,
-			HostUserID: room.HostUserID,
-			Status:     string(room.Status),
-		},
+		Room: roomDetailJSON(room),
 	}))
 }
 
@@ -152,15 +140,10 @@ func (r *RoomController) GetRoom(c echo.Context) error {
 		}
 	}
 	data := dto.GetRoomData{
-		Room: dto.RoomDetailJSON{
-			ID:         room.ID,
-			HostUserID: room.HostUserID,
-			Status:     string(room.Status),
-		},
+		Room: roomDetailJSON(room),
 	}
 	if sess != nil {
-		sid := sess.ID
-		middleware.SetAuditGameSessionID(c, &sid)
+		setAuditGameSessionID(c, sess)
 		s := dto.SessionFromDomain(sess, func(t time.Time) string {
 			return t.UTC().Format(time.RFC3339)
 		})
@@ -181,11 +164,7 @@ func (r *RoomController) ListRooms(c echo.Context) error {
 	}
 	items := make([]dto.RoomDetailJSON, 0, len(rooms))
 	for _, room := range rooms {
-		items = append(items, dto.RoomDetailJSON{
-			ID:         room.ID,
-			HostUserID: room.HostUserID,
-			Status:     string(room.Status),
-		})
+		items = append(items, roomDetailJSON(room))
 	}
 	return c.JSON(http.StatusOK, dto.OK(dto.ListRoomsData{Rooms: items}))
 }
@@ -269,15 +248,10 @@ func (r *RoomController) StartRoom(c echo.Context) error {
 		}
 	}
 	middleware.SetAuditSessionVersions(c, nil, &sess.Version)
-	sid := sess.ID
-	middleware.SetAuditGameSessionID(c, &sid)
+	setAuditGameSessionID(c, sess)
 	r.broadcastRoomState(c.Request().Context(), room.ID, userID, "ROOM_STATE_SYNC")
 	return c.JSON(http.StatusOK, dto.OK(dto.StartRoomData{
-		Room: dto.RoomDetailJSON{
-			ID:         room.ID,
-			HostUserID: room.HostUserID,
-			Status:     string(room.Status),
-		},
+		Room: roomDetailJSON(room),
 		Session: dto.SessionFromDomain(sess, func(t time.Time) string {
 			return t.UTC().Format(time.RFC3339)
 		}),
@@ -318,11 +292,7 @@ func (r *RoomController) ResetRoomDebug(c echo.Context) error {
 	}
 	r.broadcastRoomState(c.Request().Context(), roomID, userID, "ROOM_STATE_SYNC")
 	return c.JSON(http.StatusOK, dto.OK(dto.CreateRoomData{
-		Room: dto.RoomDetailJSON{
-			ID:         room.ID,
-			HostUserID: room.HostUserID,
-			Status:     string(room.Status),
-		},
+		Room: roomDetailJSON(room),
 	}))
 }
 
@@ -338,37 +308,15 @@ func (r *RoomController) RematchVote(c echo.Context) error {
 	room, sess, err := r.room.VoteRematch(c.Request().Context(), roomID, userID, req.Agree, req.ExpectedVersion, req.ActionID)
 	if err != nil {
 		middleware.SetAuditSessionVersions(c, &req.ExpectedVersion, &req.ExpectedVersion)
-		switch err {
-		case usecase.ErrUnauthorizedUser:
-			return c.JSON(http.StatusUnauthorized, dto.Fail("unauthorized", "login required"))
-		case usecase.ErrForbiddenAction:
-			return c.JSON(http.StatusForbidden, dto.Fail("forbidden", "room access denied"))
-		case usecase.ErrInvalidInput:
-			return c.JSON(http.StatusBadRequest, dto.Fail("invalid_input", "invalid rematch vote payload"))
-		case usecase.ErrInvalidGameState:
-			return c.JSON(http.StatusConflict, dto.Fail("invalid_game_state", "rematch voting is unavailable"))
-		case model.ErrVersionConflict:
-			observability.IncVersionConflict()
-			return c.JSON(http.StatusConflict, dto.Fail("version_conflict", "session version conflict"))
-		case model.ErrDuplicateAction:
-			observability.IncDuplicateAction()
-			return c.JSON(http.StatusConflict, dto.Fail("duplicate_action", "action id already used with different payload"))
-		case repository.ErrNotFound:
-			return c.JSON(http.StatusNotFound, dto.Fail("not_found", "room or session not found"))
-		default:
-			return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
+		if resp := writeTurnMutationError(c, err, "invalid rematch vote payload", "rematch voting is unavailable"); resp != nil {
+			return resp
 		}
 	}
 	middleware.SetAuditSessionVersions(c, &req.ExpectedVersion, &sess.Version)
-	sid := sess.ID
-	middleware.SetAuditGameSessionID(c, &sid)
+	setAuditGameSessionID(c, sess)
 	r.broadcastRoomState(c.Request().Context(), room.ID, userID, "ROOM_STATE_SYNC")
 	return c.JSON(http.StatusOK, dto.OK(dto.TurnActionData{
-		Room: dto.RoomDetailJSON{
-			ID:         room.ID,
-			HostUserID: room.HostUserID,
-			Status:     string(room.Status),
-		},
+		Room: roomDetailJSON(room),
 		Session: dto.SessionFromDomain(sess, func(t time.Time) string {
 			return t.UTC().Format(time.RFC3339)
 		}),
@@ -399,39 +347,57 @@ func (r *RoomController) turnAction(c echo.Context, hit bool) error {
 	}
 	if err != nil {
 		middleware.SetAuditSessionVersions(c, &req.ExpectedVersion, &req.ExpectedVersion)
-		switch err {
-		case usecase.ErrUnauthorizedUser:
-			return c.JSON(http.StatusUnauthorized, dto.Fail("unauthorized", "login required"))
-		case usecase.ErrForbiddenAction:
-			return c.JSON(http.StatusForbidden, dto.Fail("forbidden", "room access denied"))
-		case usecase.ErrInvalidInput:
-			return c.JSON(http.StatusBadRequest, dto.Fail("invalid_input", "room id and expected_version are required"))
-		case usecase.ErrInvalidGameState, model.ErrNotPlayerTurn, model.ErrNotYourTurn, model.ErrInvalidPlayerStatus:
-			return c.JSON(http.StatusConflict, dto.Fail("invalid_game_state", err.Error()))
-		case model.ErrVersionConflict:
-			observability.IncVersionConflict()
-			return c.JSON(http.StatusConflict, dto.Fail("version_conflict", "session version conflict"))
-		case model.ErrDuplicateAction:
-			observability.IncDuplicateAction()
-			return c.JSON(http.StatusConflict, dto.Fail("duplicate_action", "action id already used with different payload"))
-		case repository.ErrNotFound:
-			return c.JSON(http.StatusNotFound, dto.Fail("not_found", "room or session not found"))
-		default:
-			return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
+		if resp := writeTurnMutationError(c, err, "room id and expected_version are required", ""); resp != nil {
+			return resp
 		}
 	}
 	middleware.SetAuditSessionVersions(c, &req.ExpectedVersion, &sess.Version)
-	sid := sess.ID
-	middleware.SetAuditGameSessionID(c, &sid)
+	setAuditGameSessionID(c, sess)
 	r.broadcastRoomState(c.Request().Context(), room.ID, userID, "ROOM_STATE_SYNC")
 	return c.JSON(http.StatusOK, dto.OK(dto.TurnActionData{
-		Room: dto.RoomDetailJSON{
-			ID:         room.ID,
-			HostUserID: room.HostUserID,
-			Status:     string(room.Status),
-		},
+		Room: roomDetailJSON(room),
 		Session: dto.SessionFromDomain(sess, func(t time.Time) string {
 			return t.UTC().Format(time.RFC3339)
 		}),
 	}))
+}
+
+func roomDetailJSON(room *model.Room) dto.RoomDetailJSON {
+	return dto.RoomDetailJSON{
+		ID:         room.ID,
+		HostUserID: room.HostUserID,
+		Status:     string(room.Status),
+	}
+}
+
+func setAuditGameSessionID(c echo.Context, sess *model.GameSession) {
+	sid := sess.ID
+	middleware.SetAuditGameSessionID(c, &sid)
+}
+
+func writeTurnMutationError(c echo.Context, err error, invalidInputMessage, invalidStateDefault string) error {
+	switch err {
+	case usecase.ErrUnauthorizedUser:
+		return c.JSON(http.StatusUnauthorized, dto.Fail("unauthorized", "login required"))
+	case usecase.ErrForbiddenAction:
+		return c.JSON(http.StatusForbidden, dto.Fail("forbidden", "room access denied"))
+	case usecase.ErrInvalidInput:
+		return c.JSON(http.StatusBadRequest, dto.Fail("invalid_input", invalidInputMessage))
+	case usecase.ErrInvalidGameState, model.ErrNotPlayerTurn, model.ErrNotYourTurn, model.ErrInvalidPlayerStatus:
+		msg := invalidStateDefault
+		if msg == "" {
+			msg = err.Error()
+		}
+		return c.JSON(http.StatusConflict, dto.Fail("invalid_game_state", msg))
+	case model.ErrVersionConflict:
+		observability.IncVersionConflict()
+		return c.JSON(http.StatusConflict, dto.Fail("version_conflict", "session version conflict"))
+	case model.ErrDuplicateAction:
+		observability.IncDuplicateAction()
+		return c.JSON(http.StatusConflict, dto.Fail("duplicate_action", "action id already used with different payload"))
+	case repository.ErrNotFound:
+		return c.JSON(http.StatusNotFound, dto.Fail("not_found", "room or session not found"))
+	default:
+		return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
+	}
 }
