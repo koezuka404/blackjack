@@ -2,7 +2,9 @@
 // BLACKJACK_WS_MARK_DISCONNECTED（true/false・WS 切断時に DISCONNECTED を DB 反映するか、既定 true）,
 // WS_CONNECTION_EPOCH_TTL（例: 120s。複数インスタンス用 connection_epoch TTL、既定 120s）,
 // SERVER_ID（複数インスタンス時の Pub/Sub 重複防止用。未設定は起動ごとに UUID）,
-// BLACKJACK_PLAYER_TIMEOUT_POLICY（空または未設定: タイムアウトは自動スタンド。heuristic: 中級向けヒューリスティックでヒット可能なら Hit を試みる）。
+// BLACKJACK_PLAYER_TIMEOUT_POLICY（空または未設定: タイムアウトは自動スタンド。heuristic: 中級向けヒューリスティックでヒット可能なら Hit を試みる）,
+// REDIS_ROOM_ADDR（ゲームルーム同期/WS connection_epoch 用。未設定時 REDIS_ADDR を参照、既定 localhost:6379）,
+// REDIS_RATE_LIMIT_ADDR（レートリミット用。未設定時 REDIS_ADDR を参照、既定 localhost:6379）。
 package main
 
 import (
@@ -19,7 +21,6 @@ import (
 	"blackjack/backend/adapter/blackjackadapter"
 	"blackjack/backend/controller"
 	"blackjack/backend/db"
-	"blackjack/backend/middleware"
 	"blackjack/backend/observability"
 	"blackjack/backend/realtime"
 	"blackjack/backend/repository"
@@ -51,12 +52,14 @@ func main() {
 		log.Fatalf("database: %v", err)
 	}
 	store := repository.NewPostgreSQLStore(gdb)
-	redisAddr := os.Getenv("REDIS_ADDR")
-	if redisAddr == "" {
-		redisAddr = "localhost:6379"
-	}
-	rdb := redis.NewClient(&redis.Options{Addr: redisAddr})
-	limiter := middleware.NewRedisTokenBucketLimiter(rdb, 20, 5.0)
+	roomRedisAddr := parseRedisAddr("REDIS_ROOM_ADDR")
+	rateLimitRedisAddr := parseRedisAddr("REDIS_RATE_LIMIT_ADDR")
+
+	roomRedis := redis.NewClient(&redis.Options{Addr: roomRedisAddr})
+	rateLimitRedis := redis.NewClient(&redis.Options{Addr: rateLimitRedisAddr})
+
+	rateLimitRepo := repository.NewRedisTokenBucketRepository(rateLimitRedis, 20, 5.0)
+	limiter := usecase.NewRateLimitUsecase(rateLimitRepo)
 	authUC := usecase.NewAuthUsecase(store)
 	roomUC := usecase.NewRoomUsecase(store, blackjackadapter.NewHandEvaluator(), blackjackadapter.NewRoundEngine())
 
@@ -64,11 +67,11 @@ func main() {
 	if serverID == "" {
 		serverID = uuid.NewString()
 	}
-	roomSyncBroker := realtime.NewRoomSyncBroker(rdb, serverID)
+	roomSyncBroker := realtime.NewRoomSyncBroker(roomRedis, serverID)
 	roomSyncCtx, roomSyncCancel := context.WithCancel(context.Background())
 
 	controller.ConfigureWebSocketAllowedOrigins(parseWSAllowedOrigins())
-	controller.ConfigureWebSocketConnectionEpochStore(rdb, parseWSConnectionEpochTTL())
+	controller.ConfigureWebSocketConnectionEpochStore(roomRedis, parseWSConnectionEpochTTL())
 
 	e := echo.New()
 	roomController := router.Register(e, store, limiter, authUC, roomUC, roomSyncBroker)
@@ -86,7 +89,7 @@ func main() {
 	go runAutoStandWorker(workerCtx, e, roomUC, roomController)
 	go runSnapshotMetricsWorker(workerCtx, e, store)
 
-	e.GET("/health", healthHandler(gdb, rdb))
+	e.GET("/health", healthHandler(gdb, roomRedis, rateLimitRedis))
 	e.GET("/metrics", echo.WrapHandler(promhttp.Handler()))
 
 	port := os.Getenv("PORT")
@@ -114,8 +117,11 @@ func main() {
 		e.Logger.Errorf("server shutdown: %v", err)
 	}
 
-	if err := rdb.Close(); err != nil {
-		log.Printf("redis close: %v", err)
+	if err := roomRedis.Close(); err != nil {
+		log.Printf("room redis close: %v", err)
+	}
+	if err := rateLimitRedis.Close(); err != nil {
+		log.Printf("rate-limit redis close: %v", err)
 	}
 	sqlDB, err := gdb.DB()
 	if err != nil {
@@ -154,6 +160,16 @@ func parseWSConnectionEpochTTL() time.Duration {
 		return 2 * time.Minute
 	}
 	return d
+}
+
+func parseRedisAddr(targetEnv string) string {
+	if addr := strings.TrimSpace(os.Getenv(targetEnv)); addr != "" {
+		return addr
+	}
+	if legacy := strings.TrimSpace(os.Getenv("REDIS_ADDR")); legacy != "" {
+		return legacy
+	}
+	return "localhost:6379"
 }
 
 func runAutoStandWorker(ctx context.Context, e *echo.Echo, roomUC usecase.RoomUsecase, roomController *controller.RoomController) {
@@ -206,7 +222,7 @@ func runSnapshotMetricsWorker(ctx context.Context, e *echo.Echo, store repositor
 	}
 }
 
-func healthHandler(gdb *gorm.DB, rdb *redis.Client) echo.HandlerFunc {
+func healthHandler(gdb *gorm.DB, roomRedis, rateLimitRedis *redis.Client) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		ctx, cancel := context.WithTimeout(c.Request().Context(), 2*time.Second)
 		defer cancel()
@@ -218,18 +234,29 @@ func healthHandler(gdb *gorm.DB, rdb *redis.Client) echo.HandlerFunc {
 				"error":    err.Error(),
 			})
 		}
-		if err := rdb.Ping(ctx).Err(); err != nil {
+		if err := roomRedis.Ping(ctx).Err(); err != nil {
 			return c.JSON(http.StatusServiceUnavailable, map[string]any{
-				"status":   "unhealthy",
-				"database": "up",
-				"redis":    "down",
-				"error":    err.Error(),
+				"status":           "unhealthy",
+				"database":         "up",
+				"room_redis":       "down",
+				"rate_limit_redis": "unknown",
+				"error":            err.Error(),
+			})
+		}
+		if err := rateLimitRedis.Ping(ctx).Err(); err != nil {
+			return c.JSON(http.StatusServiceUnavailable, map[string]any{
+				"status":           "unhealthy",
+				"database":         "up",
+				"room_redis":       "up",
+				"rate_limit_redis": "down",
+				"error":            err.Error(),
 			})
 		}
 		return c.JSON(http.StatusOK, map[string]string{
-			"status":   "healthy",
-			"database": "up",
-			"redis":    "up",
+			"status":           "healthy",
+			"database":         "up",
+			"room_redis":       "up",
+			"rate_limit_redis": "up",
 		})
 	}
 }

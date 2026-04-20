@@ -20,14 +20,31 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  redis:
+  redis-room:
     image: redis:7-alpine
-    container_name: blackjack-redis
+    container_name: blackjack-redis-room
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "6379:6379"
+      - "6380:6379"
     volumes:
-      - redisdata:/data
+      - redis_room_data:/data
+    networks:
+      - blackjack
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  redis-rate-limit:
+    image: redis:7-alpine
+    container_name: blackjack-redis-rate-limit
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6381:6379"
+    volumes:
+      - redis_rate_limit_data:/data
     networks:
       - blackjack
     healthcheck:
@@ -44,13 +61,16 @@ services:
     container_name: blackjack-backend
     environment:
       DATABASE_URL: postgres://blackjack:blackjack@postgres:5432/blackjack?sslmode=disable
-      REDIS_ADDR: redis:6379
+      REDIS_ROOM_ADDR: redis-room:6379
+      REDIS_RATE_LIMIT_ADDR: redis-rate-limit:6379
     ports:
       - "8080:8080"
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
+      redis-room:
+        condition: service_healthy
+      redis-rate-limit:
         condition: service_healthy
     networks:
       - blackjack
@@ -62,4 +82,5 @@ networks:
 
 volumes:
   pgdata:
-  redisdata:
+  redis_room_data:
+  redis_rate_limit_data:

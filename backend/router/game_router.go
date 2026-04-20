@@ -14,7 +14,7 @@ import (
 func Register(
 	e *echo.Echo,
 	store repository.Store,
-	limiter middleware.RateLimiter,
+	limiter usecase.RateLimitUsecase,
 	authUC usecase.AuthUsecase,
 	roomUC usecase.RoomUsecase,
 	roomSync *realtime.RoomSyncBroker,

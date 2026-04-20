@@ -16,12 +16,12 @@ import (
 
 type RoomController struct {
 	room       usecase.RoomUsecase
-	limiter    middleware.RateLimiter
+	limiter    usecase.RateLimitUsecase
 	syncBroker *realtime.RoomSyncBroker
 }
 
 // NewRoomController はルーム API / WS 用コントローラを生成する。
-func NewRoomController(room usecase.RoomUsecase, limiter middleware.RateLimiter, syncBroker *realtime.RoomSyncBroker) *RoomController {
+func NewRoomController(room usecase.RoomUsecase, limiter usecase.RateLimitUsecase, syncBroker *realtime.RoomSyncBroker) *RoomController {
 	return &RoomController{room: room, limiter: limiter, syncBroker: syncBroker}
 }
 
