@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"blackjack/backend/dto"
+	"blackjack/backend/jwtauth"
 	"blackjack/backend/middleware"
 	"blackjack/backend/observability"
 	"blackjack/backend/repository"
@@ -135,20 +136,35 @@ func isCurrentConnectionEpoch(ctx context.Context, roomID, userID string, epoch 
 	return current == epoch, nil
 }
 
-// RoomWS は卓用 WebSocket（受信ループ・レート制限・多重接続の最新のみ有効）。
+func wsAuthReadDeadline() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("WS_AUTH_DEADLINE"))
+	if raw == "" {
+		return 15 * time.Second
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return 15 * time.Second
+	}
+	return d
+}
+
+func preWSConnectionKey(c echo.Context) string {
+	ip := strings.TrimSpace(c.RealIP())
+	if ip == "" {
+		ip = c.Request().RemoteAddr
+	}
+	return "ws-open-pre:" + ip
+}
+
+// RoomWS は卓用 WebSocket（Upgrade 直後の AUTH で user 確定、受信ループ・レート制限・多重接続の最新のみ有効）。
 func (r *RoomController) RoomWS(c echo.Context) error {
-	userID, _ := c.Get("user_id").(string)
 	roomID := c.Param("id")
-	if userID == "" || roomID == "" {
-		return c.JSON(http.StatusBadRequest, dto.Fail("invalid_input", "user and room are required"))
+	if roomID == "" {
+		return c.JSON(http.StatusBadRequest, dto.Fail("invalid_input", "room is required"))
 	}
-	_, sess, err := r.room.GetRoom(c.Request().Context(), roomID, userID)
-	if err != nil {
-		return c.JSON(http.StatusForbidden, dto.Fail("forbidden", "room access denied"))
-	}
+	preKey := preWSConnectionKey(c)
 	if r.limiter != nil {
-		// WS 接続確立（Upgrade）にもレート制限を適用する。
-		ok, err := r.limiter.Allow(c.Request().Context(), "ws-open:"+userID)
+		ok, err := r.limiter.Allow(c.Request().Context(), preKey)
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
 		}
@@ -160,16 +176,60 @@ func (r *RoomController) RoomWS(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	// 最新接続のみ有効化するため、同一 room+userの古い接続はclose
-	epoch, err := registerConnectionEpoch(c.Request().Context(), roomID, userID)
+	writeMu := &sync.Mutex{}
+	preMeta := wsConnMeta{writeMu: writeMu}
+
+	authFrameStart := time.Now().UTC()
+	_ = conn.SetReadDeadline(time.Now().Add(wsAuthReadDeadline()))
+	_, first, err := conn.ReadMessage()
 	if err != nil {
 		_ = conn.Close()
-		return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
+		return nil
 	}
-	meta := wsConnMeta{userID: userID, epoch: epoch, writeMu: &sync.Mutex{}}
-	if err := r.room.MarkConnected(c.Request().Context(), roomID, userID); err != nil && err != repository.ErrNotFound {
+	_ = conn.SetReadDeadline(time.Time{})
+
+	var authMsg dto.WSAuthMessage
+	if err := json.Unmarshal(first, &authMsg); err != nil || authMsg.Type != dto.WSEventAuth || strings.TrimSpace(authMsg.AccessToken) == "" {
+		sendWSError(conn, preMeta, dto.WSErrorUnauthorized, "first message must be AUTH with access_token")
 		_ = conn.Close()
-		return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
+		return nil
+	}
+	userID, jti, err := jwtauth.ParseAndValidate(r.jwtSecret, authMsg.AccessToken)
+	if err != nil {
+		sendWSError(conn, preMeta, dto.WSErrorUnauthorized, "invalid or expired token")
+		_ = conn.Close()
+		return nil
+	}
+	_, sess, err := r.room.GetRoom(c.Request().Context(), roomID, userID)
+	if err != nil {
+		sendWSError(conn, preMeta, dto.WSErrorForbidden, "room access denied")
+		_ = conn.Close()
+		return nil
+	}
+	if r.limiter != nil {
+		ok, err := r.limiter.Allow(c.Request().Context(), "ws-open:"+userID)
+		if err != nil {
+			sendWSError(conn, preMeta, dto.WSErrorInternal, err.Error())
+			_ = conn.Close()
+			return nil
+		}
+		if !ok {
+			sendWSError(conn, preMeta, dto.WSErrorRateLimited, "too many websocket connection attempts")
+			_ = conn.Close()
+			return nil
+		}
+	}
+	epoch, err := registerConnectionEpoch(c.Request().Context(), roomID, userID)
+	if err != nil {
+		sendWSError(conn, preMeta, dto.WSErrorInternal, err.Error())
+		_ = conn.Close()
+		return nil
+	}
+	meta := wsConnMeta{userID: userID, epoch: epoch, writeMu: writeMu}
+	if err := r.room.MarkConnected(c.Request().Context(), roomID, userID); err != nil && err != repository.ErrNotFound {
+		sendWSError(conn, preMeta, dto.WSErrorInternal, err.Error())
+		_ = conn.Close()
+		return nil
 	}
 	old := globalRoomHub.add(roomID, conn, meta)
 	observability.IncActiveWSConnections()
@@ -187,7 +247,12 @@ func (r *RoomController) RoomWS(c echo.Context) error {
 		"audit_event":      "WS_CONNECTION_EPOCH_ASSIGNED",
 		"connection_epoch": epoch,
 	})
-	r.broadcastRoomState(c.Request().Context(), roomID, userID, "ROOM_STATE_SYNC")
+	r.broadcastRoomState(c.Request().Context(), roomID, userID, dto.WSEventRoomSync)
+
+	reqID, _ := c.Get(middleware.RequestIDContextKey).(string)
+	audit := &WsAuditLogContext{Logger: c.Logger(), RequestID: reqID, SessionID: jti}
+	logWSEvent(audit, dto.WSActionRequest{Type: dto.WSEventAuth, RequestID: authMsg.RequestID}, roomID, userID, nil, nil, nil, authFrameStart, "success", "", nil)
+
 	go func() {
 		defer func() {
 			isLatest := globalRoomHub.isLatest(roomID, userID, conn)
@@ -236,14 +301,14 @@ func (r *RoomController) RoomWS(c echo.Context) error {
 				continue
 			}
 			if !isCurrentEpoch {
-				logWSEvent(c, req, roomID, userID, nil, nil, nil, msgStart, "failure", dto.WSErrorForbidden, map[string]any{
+				logWSEvent(audit, req, roomID, userID, nil, nil, nil, msgStart, "failure", dto.WSErrorForbidden, map[string]any{
 					"audit_event":      "WS_CONNECTION_EPOCH_SUPERSEDED",
 					"connection_epoch": meta.epoch,
 				})
 				sendWSError(conn, meta, dto.WSErrorForbidden, "stale websocket connection")
 				return
 			}
-			r.handleGameWSAction(c, req, roomID, userID, conn, meta, msgStart)
+			r.handleGameWSAction(audit, req, roomID, userID, conn, meta, msgStart)
 		}
 	}()
 	return nil

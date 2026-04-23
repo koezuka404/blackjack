@@ -18,11 +18,12 @@ type RoomController struct {
 	room       usecase.RoomUsecase
 	limiter    usecase.RateLimitUsecase
 	syncBroker *realtime.RoomSyncBroker
+	jwtSecret  []byte
 }
 
 // NewRoomController はルーム API / WS 用コントローラを生成する。
-func NewRoomController(room usecase.RoomUsecase, limiter usecase.RateLimitUsecase, syncBroker *realtime.RoomSyncBroker) *RoomController {
-	return &RoomController{room: room, limiter: limiter, syncBroker: syncBroker}
+func NewRoomController(room usecase.RoomUsecase, limiter usecase.RateLimitUsecase, syncBroker *realtime.RoomSyncBroker, jwtSecret []byte) *RoomController {
+	return &RoomController{room: room, limiter: limiter, syncBroker: syncBroker, jwtSecret: jwtSecret}
 }
 
 // Register は HTTP のルーム系ルートを登録する（HIT/STAND 等）。

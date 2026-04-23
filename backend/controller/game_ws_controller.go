@@ -11,10 +11,9 @@ import (
 	"blackjack/backend/usecase"
 
 	"github.com/gorilla/websocket"
-	"github.com/labstack/echo/v4"
 )
 
-func (r *RoomController) handleGameWSAction(c echo.Context, req dto.WSActionRequest, roomID, userID string, conn *websocket.Conn, meta wsConnMeta, msgStart time.Time) {
+func (r *RoomController) handleGameWSAction(ws *WsAuditLogContext, req dto.WSActionRequest, roomID, userID string, conn *websocket.Conn, meta wsConnMeta, msgStart time.Time) {
 	switch req.Type {
 	case dto.WSEventHit:
 		// 更新系: action_id + expected_version
@@ -26,13 +25,13 @@ func (r *RoomController) handleGameWSAction(c echo.Context, req dto.WSActionRequ
 		ev := req.ExpectedVersion
 		if err != nil {
 			code, message := mapWSError(err)
-			logWSEvent(c, req, roomID, userID, nil, &ev, &ev, msgStart, "failure", code, nil)
+			logWSEvent(ws, req, roomID, userID, nil, &ev, &ev, msgStart, "failure", code, nil)
 			sendWSError(conn, meta, code, message)
 			return
 		}
 		sv := sess.Version
 		gid := sess.ID
-		logWSEvent(c, req, roomID, userID, &gid, &ev, &sv, msgStart, "success", "", nil)
+		logWSEvent(ws, req, roomID, userID, &gid, &ev, &sv, msgStart, "success", "", nil)
 		r.broadcastRoomState(context.Background(), roomID, userID, dto.WSEventRoomSync)
 	case dto.WSEventStand:
 		// 更新系: STAND も HIT と同じ検証・整合性フローで処理する
@@ -44,13 +43,13 @@ func (r *RoomController) handleGameWSAction(c echo.Context, req dto.WSActionRequ
 		ev := req.ExpectedVersion
 		if err != nil {
 			code, message := mapWSError(err)
-			logWSEvent(c, req, roomID, userID, nil, &ev, &ev, msgStart, "failure", code, nil)
+			logWSEvent(ws, req, roomID, userID, nil, &ev, &ev, msgStart, "failure", code, nil)
 			sendWSError(conn, meta, code, message)
 			return
 		}
 		sv := sess.Version
 		gid := sess.ID
-		logWSEvent(c, req, roomID, userID, &gid, &ev, &sv, msgStart, "success", "", nil)
+		logWSEvent(ws, req, roomID, userID, &gid, &ev, &sv, msgStart, "success", "", nil)
 		r.broadcastRoomState(context.Background(), roomID, userID, dto.WSEventRoomSync)
 	case dto.WSEventRematchVote:
 		// 再戦投票は WS のみ受け付ける（HTTP fallback なし）
@@ -62,24 +61,24 @@ func (r *RoomController) handleGameWSAction(c echo.Context, req dto.WSActionRequ
 		ev := req.ExpectedVersion
 		if err != nil {
 			code, message := mapWSError(err)
-			logWSEvent(c, req, roomID, userID, nil, &ev, &ev, msgStart, "failure", code, nil)
+			logWSEvent(ws, req, roomID, userID, nil, &ev, &ev, msgStart, "failure", code, nil)
 			sendWSError(conn, meta, code, message)
 			return
 		}
 		sv := sess.Version
 		gid := sess.ID
-		logWSEvent(c, req, roomID, userID, &gid, &ev, &sv, msgStart, "success", "", nil)
+		logWSEvent(ws, req, roomID, userID, &gid, &ev, &sv, msgStart, "success", "", nil)
 		r.broadcastRoomState(context.Background(), roomID, userID, dto.WSEventRoomSync)
 	case dto.WSEventRoomSyncReq:
 		// 読み取り系同期要求は version 不一致をエラーにせず、正本を再送する
-		logWSEvent(c, req, roomID, userID, nil, nil, nil, msgStart, "success", "", nil)
+		logWSEvent(ws, req, roomID, userID, nil, nil, nil, msgStart, "success", "", nil)
 		r.broadcastRoomState(context.Background(), roomID, userID, dto.WSEventRoomSync)
 	case dto.WSEventPing:
 		// 接続が生きているか確認
-		logWSEvent(c, req, roomID, userID, nil, nil, nil, msgStart, "success", "", nil)
+		logWSEvent(ws, req, roomID, userID, nil, nil, nil, msgStart, "success", "", nil)
 		sendWSPong(conn, meta)
 	default:
-		logWSEvent(c, req, roomID, userID, nil, nil, nil, msgStart, "failure", dto.WSErrorInvalidInput, nil)
+		logWSEvent(ws, req, roomID, userID, nil, nil, nil, msgStart, "failure", dto.WSErrorInvalidInput, nil)
 		sendWSError(conn, meta, dto.WSErrorInvalidInput, "unsupported ws event type")
 	}
 }

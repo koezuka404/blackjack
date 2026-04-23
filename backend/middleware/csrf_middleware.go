@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"strings"
 
 	"blackjack/backend/dto"
 
@@ -12,6 +13,10 @@ func CSRFMiddleware() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			if !needsCSRF(c) {
+				return next(c)
+			}
+			// Authorization: Bearer はブラウザがクロスサイトで自動付与しないため CSRF を省略する。
+			if hasBearerAuth(c) {
 				return next(c)
 			}
 			ck, err := c.Cookie("csrf_token")
@@ -25,6 +30,12 @@ func CSRFMiddleware() echo.MiddlewareFunc {
 			return next(c)
 		}
 	}
+}
+
+func hasBearerAuth(c echo.Context) bool {
+	h := c.Request().Header.Get("Authorization")
+	const prefix = "Bearer "
+	return len(h) >= len(prefix) && strings.EqualFold(h[:len(prefix)], prefix) && strings.TrimSpace(h[len(prefix):]) != ""
 }
 
 func needsCSRF(c echo.Context) bool {

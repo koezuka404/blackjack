@@ -1,13 +1,8 @@
 package controller
 
 import (
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"net/http"
-	"os"
-	"strconv"
-	"strings"
 	"time"
 
 	"blackjack/backend/dto"
@@ -38,7 +33,7 @@ func (a *AuthController) Register(g *echo.Group) {
 	g.GET("/me", a.Me)
 }
 
-// Signup は新規登録し、セッション・CSRF Cookie を返す。
+// Signup は新規登録し JWT を返す。
 func (a *AuthController) Signup(c echo.Context) error {
 	var req loginRequest
 	if err := c.Bind(&req); err != nil || req.Username == "" || req.Password == "" {
@@ -55,22 +50,18 @@ func (a *AuthController) Signup(c echo.Context) error {
 			return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
 		}
 	}
-	setSessionCookie(c, res.SessionToken(), int(res.ExpiresAt().Sub(time.Now().UTC()).Seconds()))
-	csrfToken, err := generateCSRFToken()
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
-	}
-	setCSRFCookie(c, csrfToken, int(res.ExpiresAt().Sub(time.Now().UTC()).Seconds()))
 	return c.JSON(http.StatusCreated, dto.OK(map[string]any{
+		"access_token": res.SessionToken(),
+		"token_type":   "Bearer",
+		"expires_in":   int(res.ExpiresAt().Sub(time.Now().UTC()).Seconds()),
 		"user": map[string]any{
 			"id":       res.User().ID,
 			"username": res.User().Username,
 		},
-		"csrf_token": csrfToken,
 	}))
 }
 
-// Login はログインし、セッション・CSRF Cookie を返す。
+// Login はログインし JWT を返す。
 func (a *AuthController) Login(c echo.Context) error {
 	var req loginRequest
 	if err := c.Bind(&req); err != nil || req.Username == "" || req.Password == "" {
@@ -83,39 +74,30 @@ func (a *AuthController) Login(c echo.Context) error {
 		}
 		return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
 	}
-	setSessionCookie(c, res.SessionToken(), int(res.ExpiresAt().Sub(time.Now().UTC()).Seconds()))
-	csrfToken, err := generateCSRFToken()
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
-	}
-	setCSRFCookie(c, csrfToken, int(res.ExpiresAt().Sub(time.Now().UTC()).Seconds()))
 	return c.JSON(http.StatusOK, dto.OK(map[string]any{
+		"access_token": res.SessionToken(),
+		"token_type":   "Bearer",
+		"expires_in":   int(res.ExpiresAt().Sub(time.Now().UTC()).Seconds()),
 		"user": map[string]any{
 			"id":       res.User().ID,
 			"username": res.User().Username,
 		},
-		"csrf_token": csrfToken,
 	}))
 }
 
-// Logout はサーバー側セッション削除と Cookie クリアを行う。
+// Logout はクライアント側トークン破棄用の成功応答（サーバーはステートレスで無効化しない）。
 func (a *AuthController) Logout(c echo.Context) error {
-	sessionID, _ := readSessionCookie(c)
-	if err := a.auth.Logout(c.Request().Context(), sessionID); err != nil {
-		return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
-	}
-	clearSessionCookie(c)
-	clearCSRFCookie(c)
+	_ = a.auth.Logout(c.Request().Context())
 	return c.JSON(http.StatusOK, dto.OK(map[string]any{}))
 }
 
-// Me は Cookie セッションから現在ユーザーを返す。
+// Me は JWT から解決した現在ユーザーを返す。
 func (a *AuthController) Me(c echo.Context) error {
-	sessionID, ok := readSessionCookie(c)
-	if !ok {
+	userID, _ := c.Get("user_id").(string)
+	if userID == "" {
 		return c.JSON(http.StatusUnauthorized, dto.Fail("unauthorized", "not logged in"))
 	}
-	user, err := a.auth.Me(c.Request().Context(), sessionID)
+	user, err := a.auth.Me(c.Request().Context(), userID)
 	if err != nil {
 		return c.JSON(http.StatusUnauthorized, dto.Fail("unauthorized", "not logged in"))
 	}
@@ -123,88 +105,4 @@ func (a *AuthController) Me(c echo.Context) error {
 		"id":       user.ID,
 		"username": user.Username,
 	}))
-}
-
-// readSessionCookie は session_id Cookie を読む。
-func readSessionCookie(c echo.Context) (string, bool) {
-	ck, err := c.Cookie("session_id")
-	if err != nil || ck.Value == "" {
-		return "", false
-	}
-	return ck.Value, true
-}
-
-// setSessionCookie は HttpOnly セッション Cookie をセットする。
-func setSessionCookie(c echo.Context, token string, maxAge int) {
-	c.SetCookie(&http.Cookie{
-		Name:     "session_id",
-		Value:    token,
-		Path:     "/",
-		MaxAge:   maxAge,
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   cookieSecure(),
-	})
-}
-
-// clearSessionCookie はセッション Cookie を消す。
-func clearSessionCookie(c echo.Context) {
-	c.SetCookie(&http.Cookie{
-		Name:     "session_id",
-		Value:    "",
-		Path:     "/",
-		MaxAge:   -1,
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   cookieSecure(),
-	})
-}
-
-// cookieSecure は Secure 属性を環境変数 COOKIE_SECURE で切り替える。
-// 未設定または不正値は安全側（true）を使う。
-func cookieSecure() bool {
-	raw := strings.TrimSpace(os.Getenv("COOKIE_SECURE"))
-	if raw == "" {
-		return true
-	}
-	v, err := strconv.ParseBool(raw)
-	if err != nil {
-		return true
-	}
-	return v
-}
-
-// setCSRFCookie は Double Submit 用 csrf_token をセットする。
-func setCSRFCookie(c echo.Context, token string, maxAge int) {
-	c.SetCookie(&http.Cookie{
-		Name:     "csrf_token",
-		Value:    token,
-		Path:     "/",
-		MaxAge:   maxAge,
-		HttpOnly: false,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   cookieSecure(),
-	})
-}
-
-// clearCSRFCookie は CSRF Cookie を消す。
-func clearCSRFCookie(c echo.Context) {
-	c.SetCookie(&http.Cookie{
-		Name:     "csrf_token",
-		Value:    "",
-		Path:     "/",
-		MaxAge:   -1,
-		HttpOnly: false,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   cookieSecure(),
-	})
-}
-
-// generateCSRFToken は CSRF トークン文字列を生成する。
-func generateCSRFToken() (string, error) {
-	buf := make([]byte, 32)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(buf), nil
 }

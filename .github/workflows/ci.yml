@@ -103,7 +103,7 @@ jobs:
         env:
           DATABASE_URL: postgres://blackjack:blackjack@localhost:5432/blackjack?sslmode=disable
           REDIS_ADDR: localhost:6379
-          COOKIE_SECURE: "false"
+          JWT_SECRET: ci-jwt-secret-min-16bytes!!
         run: |
           go run . > /tmp/backend.log 2>&1 &
           echo $! > /tmp/backend.pid
@@ -123,31 +123,32 @@ jobs:
           BASE="http://localhost:8080/api"
           USER="ci_$(date +%s)"
           PASS="password12"
-          RESP=$(curl -s -c cookies.txt -b cookies.txt -H "Content-Type: application/json" \
+          RESP=$(curl -s -H "Content-Type: application/json" \
             -d "{\"username\":\"$USER\",\"password\":\"$PASS\"}" "$BASE/auth/signup")
-          CSRF=$(echo "$RESP" | jq -r '.data.csrf_token')
-          test -n "$CSRF" && test "$CSRF" != "null"
+          TOKEN=$(echo "$RESP" | jq -r '.data.access_token')
+          test -n "$TOKEN" && test "$TOKEN" != "null"
+          AUTH=(-H "Authorization: Bearer $TOKEN")
 
-          ROOM_RESP=$(curl -s -c cookies.txt -b cookies.txt -H "X-CSRF-Token: $CSRF" -X POST "$BASE/rooms")
+          ROOM_RESP=$(curl -s "${AUTH[@]}" -X POST "$BASE/rooms")
           ROOM_ID=$(echo "$ROOM_RESP" | jq -r '.data.room.id')
           test -n "$ROOM_ID" && test "$ROOM_ID" != "null"
 
-          curl -s -c cookies.txt -b cookies.txt -H "X-CSRF-Token: $CSRF" -X POST "$BASE/rooms/$ROOM_ID/join" | jq -e '.success == true' >/dev/null
-          curl -s -c cookies.txt -b cookies.txt -H "X-CSRF-Token: $CSRF" -X POST "$BASE/rooms/$ROOM_ID/start" | jq -e '.success == true' >/dev/null
+          curl -s "${AUTH[@]}" -X POST "$BASE/rooms/$ROOM_ID/join" | jq -e '.success == true' >/dev/null
+          curl -s "${AUTH[@]}" -X POST "$BASE/rooms/$ROOM_ID/start" | jq -e '.success == true' >/dev/null
 
-          VER=$(curl -s -c cookies.txt -b cookies.txt "$BASE/rooms/$ROOM_ID" | jq -r '.data.session.version')
+          VER=$(curl -s "${AUTH[@]}" "$BASE/rooms/$ROOM_ID" | jq -r '.data.session.version')
           AID1="hit-$(date +%s)-$RANDOM"
-          curl -s -c cookies.txt -b cookies.txt -H "Content-Type: application/json" -H "X-CSRF-Token: $CSRF" \
+          curl -s "${AUTH[@]}" -H "Content-Type: application/json" \
             -d "{\"expected_version\":$VER,\"action_id\":\"$AID1\"}" -X POST "$BASE/rooms/$ROOM_ID/hit" \
             | jq -e '.success == true or .error.code == "invalid_game_state"' >/dev/null
 
-          VER2=$(curl -s -c cookies.txt -b cookies.txt "$BASE/rooms/$ROOM_ID" | jq -r '.data.session.version')
+          VER2=$(curl -s "${AUTH[@]}" "$BASE/rooms/$ROOM_ID" | jq -r '.data.session.version')
           AID2="stand-$(date +%s)-$RANDOM"
-          curl -s -c cookies.txt -b cookies.txt -H "Content-Type: application/json" -H "X-CSRF-Token: $CSRF" \
+          curl -s "${AUTH[@]}" -H "Content-Type: application/json" \
             -d "{\"expected_version\":$VER2,\"action_id\":\"$AID2\"}" -X POST "$BASE/rooms/$ROOM_ID/stand" \
             | jq -e '.success == true or .error.code == "invalid_game_state"' >/dev/null
 
-          curl -s -c cookies.txt -b cookies.txt "$BASE/rooms/$ROOM_ID" | jq -e '.success == true' >/dev/null
+          curl -s "${AUTH[@]}" "$BASE/rooms/$ROOM_ID" | jq -e '.success == true' >/dev/null
 
       - name: Stop backend
         if: always()

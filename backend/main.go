@@ -4,7 +4,9 @@
 // SERVER_ID（複数インスタンス時の Pub/Sub 重複防止用。未設定は起動ごとに UUID）,
 // BLACKJACK_PLAYER_TIMEOUT_POLICY（空または未設定: タイムアウトは自動スタンド。heuristic: 中級向けヒューリスティックでヒット可能なら Hit を試みる）,
 // REDIS_ROOM_ADDR（ゲームルーム同期/WS connection_epoch 用。未設定時 REDIS_ADDR を参照、既定 localhost:6379）,
-// REDIS_RATE_LIMIT_ADDR（レートリミット用。未設定時 REDIS_ADDR を参照、既定 localhost:6379）。
+// REDIS_RATE_LIMIT_ADDR（レートリミット用。未設定時 REDIS_ADDR を参照、既定 localhost:6379）,
+// JWT_SECRET（HS256 用。16 文字以上必須）,
+// WS_AUTH_DEADLINE（既定 15s。Upgrade 後、最初の AUTH メッセージを待つ読み取り期限。例: 30s）,
 package main
 
 import (
@@ -60,7 +62,12 @@ func main() {
 
 	rateLimitRepo := repository.NewRedisTokenBucketRepository(rateLimitRedis, 20, 5.0)
 	limiter := usecase.NewRateLimitUsecase(rateLimitRepo)
-	authUC := usecase.NewAuthUsecase(store)
+
+	jwtSecret := []byte(strings.TrimSpace(os.Getenv("JWT_SECRET")))
+	if len(jwtSecret) < 16 {
+		log.Fatal("JWT_SECRET is required and must be at least 16 bytes")
+	}
+	authUC := usecase.NewAuthUsecase(store, jwtSecret)
 	roomUC := usecase.NewRoomUsecase(store, blackjackadapter.NewHandEvaluator(), blackjackadapter.NewRoundEngine())
 
 	serverID := strings.TrimSpace(os.Getenv("SERVER_ID"))
@@ -74,7 +81,7 @@ func main() {
 	controller.ConfigureWebSocketConnectionEpochStore(roomRedis, parseWSConnectionEpochTTL())
 
 	e := echo.New()
-	roomController := router.Register(e, store, limiter, authUC, roomUC, roomSyncBroker)
+	roomController := router.Register(e, store, limiter, authUC, roomUC, roomSyncBroker, jwtSecret)
 
 	go func() {
 		err := roomSyncBroker.RunSubscriber(roomSyncCtx, func(ctx context.Context, roomID, eventType string) {

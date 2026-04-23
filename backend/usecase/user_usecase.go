@@ -2,12 +2,11 @@ package usecase
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"strings"
 	"time"
 
+	"blackjack/backend/jwtauth"
 	"blackjack/backend/model"
 	"blackjack/backend/repository"
 
@@ -28,8 +27,8 @@ type AuthResponse interface {
 type AuthUsecase interface {
 	Signup(ctx context.Context, username, password string) (AuthResponse, error)
 	Login(ctx context.Context, username, password string) (AuthResponse, error)
-	Logout(ctx context.Context, sessionID string) error
-	Me(ctx context.Context, sessionID string) (*model.User, error)
+	Logout(ctx context.Context) error
+	Me(ctx context.Context, userID string) (*model.User, error)
 }
 
 type authResponse struct {
@@ -38,24 +37,26 @@ type authResponse struct {
 	user      *model.User
 }
 
-func (r authResponse) SessionToken() string { return r.token }     // クッキー用セッショントークン
-func (r authResponse) ExpiresAt() time.Time { return r.expiresAt } // セッション失効時刻
-func (r authResponse) User() *model.User    { return r.user }      // ログイン済みユーザー
+func (r authResponse) SessionToken() string { return r.token }
+func (r authResponse) ExpiresAt() time.Time { return r.expiresAt }
+func (r authResponse) User() *model.User    { return r.user }
 
 type authService struct {
 	store      repository.Store
+	jwtSecret  []byte
 	sessionTTL time.Duration
 }
 
-// NewAuthUsecase は認証ユースケース（サインアップ・ログイン・セッション）を組み立てる。
-func NewAuthUsecase(store repository.Store) AuthUsecase {
+// NewAuthUsecase は認証（JWT アクセストークン）を組み立てる。
+func NewAuthUsecase(store repository.Store, jwtSecret []byte) AuthUsecase {
 	return &authService{
 		store:      store,
+		jwtSecret:  jwtSecret,
 		sessionTTL: 24 * time.Hour,
 	}
 }
 
-// Signup はユーザーを作成し、DB セッションを発行してログイン状態にする。
+// Signup はユーザーを作成し JWT を返す。
 func (u *authService) Signup(ctx context.Context, username, password string) (AuthResponse, error) {
 	username = strings.TrimSpace(username)
 	if len(username) < 3 || len(username) > 100 || len(password) < 8 {
@@ -74,35 +75,23 @@ func (u *authService) Signup(ctx context.Context, username, password string) (Au
 		UpdatedAt:    now,
 	}
 
-	token, err := generateSessionID()
-	if err != nil {
+	if err := u.store.Transaction(ctx, func(tx repository.Store) error {
+		return tx.CreateUser(ctx, user)
+	}); err != nil {
+		if err == repository.ErrAlreadyExists {
+			return nil, ErrUsernameTaken
+		}
 		return nil, err
-	}
-	expiresAt := now.Add(u.sessionTTL)
-	sess := &model.Session{
-		ID:        token,
-		UserID:    user.ID,
-		ExpiresAt: expiresAt,
-		CreatedAt: now,
 	}
 
-	err = u.store.Transaction(ctx, func(tx repository.Store) error {
-		if err := tx.CreateUser(ctx, user); err != nil {
-			if err == repository.ErrAlreadyExists {
-				return ErrUsernameTaken
-			}
-			return err
-		}
-		return tx.UpsertSession(ctx, sess)
-	})
+	token, exp, _, err := jwtauth.SignAccessToken(u.jwtSecret, user.ID, u.sessionTTL)
 	if err != nil {
 		return nil, err
 	}
-	_ = u.store.DeleteExpiredSessions(ctx)
-	return authResponse{token: token, expiresAt: expiresAt, user: user}, nil
+	return authResponse{token: token, expiresAt: exp, user: user}, nil
 }
 
-// Login は資格情報を検証し、新しいサーバーサイドセッションを発行する。
+// Login は資格情報を検証し JWT を発行する（ステートレス。サーバー側セッション行は作らない）。
 func (u *authService) Login(ctx context.Context, username, password string) (AuthResponse, error) {
 	user, err := u.store.GetUserByUsername(ctx, username)
 	if err != nil {
@@ -111,63 +100,27 @@ func (u *authService) Login(ctx context.Context, username, password string) (Aut
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		return nil, ErrUnauthorized
 	}
-	token, err := generateSessionID()
+	token, exp, _, err := jwtauth.SignAccessToken(u.jwtSecret, user.ID, u.sessionTTL)
 	if err != nil {
 		return nil, err
 	}
-	expiresAt := time.Now().UTC().Add(u.sessionTTL)
-	sess := &model.Session{
-		ID:        token,
-		UserID:    user.ID,
-		ExpiresAt: expiresAt,
-		CreatedAt: time.Now().UTC(),
-	}
-	if err := u.store.Transaction(ctx, func(tx repository.Store) error {
-		// session fixation 防止のため、同一ユーザーの既存セッションを無効化してから新規発行する。
-		if err := tx.DeleteSessionsByUserID(ctx, user.ID); err != nil {
-			return err
-		}
-		return tx.UpsertSession(ctx, sess)
-	}); err != nil {
-		return nil, err
-	}
-	_ = u.store.DeleteExpiredSessions(ctx)
-	return authResponse{token: token, expiresAt: expiresAt, user: user}, nil
+	return authResponse{token: token, expiresAt: exp, user: user}, nil
 }
 
-// Logout はセッションを DB から無効化する（クッキー削除は Controller 側）。
-func (u *authService) Logout(ctx context.Context, sessionID string) error {
-	if sessionID == "" {
-		return nil
-	}
-	return u.store.DeleteSession(ctx, sessionID)
+// Logout はステートレス JWT のためサーバー側では無効化しない（クライアントが破棄する）。
+func (u *authService) Logout(ctx context.Context) error {
+	_ = ctx
+	return nil
 }
 
-// Me は有効なセッションに紐づくユーザーを返す。
-func (u *authService) Me(ctx context.Context, sessionID string) (*model.User, error) {
-	if sessionID == "" {
+// Me は user_id に紐づくユーザーを返す。
+func (u *authService) Me(ctx context.Context, userID string) (*model.User, error) {
+	if userID == "" {
 		return nil, ErrUnauthorized
 	}
-	sess, err := u.store.GetAuthSession(ctx, sessionID)
-	if err != nil {
-		return nil, ErrUnauthorized
-	}
-	if sess.ExpiresAt.Before(time.Now().UTC()) {
-		_ = u.store.DeleteSession(ctx, sessionID)
-		return nil, ErrUnauthorized
-	}
-	user, err := u.store.GetUserByID(ctx, sess.UserID)
+	user, err := u.store.GetUserByID(ctx, userID)
 	if err != nil {
 		return nil, ErrUnauthorized
 	}
 	return user, nil
-}
-
-// generateSessionID は推測困難なセッション ID を生成する。
-func generateSessionID() (string, error) {
-	buf := make([]byte, 32)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(buf), nil
 }

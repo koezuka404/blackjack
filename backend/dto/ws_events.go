@@ -1,6 +1,7 @@
 package dto
 
 const (
+	WSEventAuth        = "AUTH"
 	WSEventHit         = "HIT"
 	WSEventStand       = "STAND"
 	WSEventRematchVote = "REMATCH_VOTE"
@@ -23,6 +24,13 @@ const (
 	WSErrorRateLimited     = "rate_limited"
 	WSErrorInternal        = "internal_error"
 )
+
+// WSAuthMessage は接続直後の 1 通目に送る JWT（URL に載せない）。
+type WSAuthMessage struct {
+	Type          string `json:"type"`
+	RequestID     string `json:"request_id,omitempty"`
+	AccessToken   string `json:"access_token"`
+}
 
 type WSActionRequest struct {
 	Type            string `json:"type"`
