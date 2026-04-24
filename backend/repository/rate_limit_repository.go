@@ -26,49 +26,63 @@ func NewRedisTokenBucketRepository(rdb *redis.Client, capacity int, refillPerSec
 }
 
 var tokenBucketScript = redis.NewScript(`
-local tokens_key = KEYS[1]
-local ts_key = KEYS[2]
-local capacity = tonumber(ARGV[1])
-local refill = tonumber(ARGV[2])
-local now_ms = tonumber(ARGV[3])
-local ttl_ms = tonumber(ARGV[4])
-local cost = tonumber(ARGV[5])
+local key = KEYS[1]
+local rate = tonumber(ARGV[1])
+local capacity = tonumber(ARGV[2])
+local cost = tonumber(ARGV[3])
+local now = tonumber(ARGV[4])
 
-local tokens = tonumber(redis.call("GET", tokens_key))
+if rate <= 0 or capacity <= 0 or cost <= 0 then
+  return {0, 0, 0}
+end
+
+local data = redis.call("HMGET", key, "tokens", "ts")
+local tokens = tonumber(data[1])
+local ts = tonumber(data[2])
+
 if tokens == nil then tokens = capacity end
-local last_ms = tonumber(redis.call("GET", ts_key))
-if last_ms == nil then last_ms = now_ms end
+if ts == nil then ts = now end
 
-local elapsed = now_ms - last_ms
-if elapsed < 0 then elapsed = 0 end
-local refill_tokens = elapsed * refill / 1000.0
-tokens = math.min(capacity, tokens + refill_tokens)
+local delta = now - ts
+if delta < 0 then delta = 0 end
+
+local refill = (delta / 1000.0) * rate
+tokens = math.min(capacity, tokens + refill)
+ts = now
 
 local allowed = 0
+local retry_after_ms = 0
+
 if tokens >= cost then
-  tokens = tokens - cost
   allowed = 1
+  tokens = tokens - cost
+else
+  local need = cost - tokens
+  retry_after_ms = math.ceil((need / rate) * 1000.0)
 end
 
-redis.call("SET", tokens_key, tokens, "PX", ttl_ms)
-redis.call("SET", ts_key, now_ms, "PX", ttl_ms)
-local retry_after_ms = 0
-if allowed == 0 then
-  retry_after_ms = math.ceil((cost - tokens) * 1000.0 / refill)
-  if retry_after_ms < 0 then retry_after_ms = 0 end
-end
+redis.call("HMSET", key, "tokens", tokens, "ts", ts)
+
+local ttl_ms = math.ceil((capacity / rate) * 2000.0)
+if ttl_ms < 1000 then ttl_ms = 1000 end
+redis.call("PEXPIRE", key, ttl_ms)
+
 return {allowed, tokens, retry_after_ms}
 `)
 
 func (r *RedisTokenBucketRepository) Allow(ctx context.Context, key string) (bool, float64, int64, error) {
+	if r.rdb == nil {
+		return false, 0, 0, errors.New("redis client is nil")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 150*time.Millisecond)
+	defer cancel()
 	now := time.Now().UTC().UnixMilli()
-	ttl := int64((float64(r.capacity)/r.refill)*2000 + 1000)
 	const cost = 1.0
 	res, err := tokenBucketScript.Run(
 		ctx,
 		r.rdb,
-		[]string{"rate:" + key + ":tokens", "rate:" + key + ":ts"},
-		r.capacity, strconv.FormatFloat(r.refill, 'f', -1, 64), now, ttl, strconv.FormatFloat(cost, 'f', -1, 64),
+		[]string{"rate:" + key},
+		strconv.FormatFloat(r.refill, 'f', -1, 64), r.capacity, strconv.FormatFloat(cost, 'f', -1, 64), now,
 	).Result()
 	if err != nil {
 		return false, 0, 0, err
