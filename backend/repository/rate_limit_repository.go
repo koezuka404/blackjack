@@ -12,17 +12,17 @@ import (
 
 // RateLimitRepository はレート制御の永続化/外部I/O（Redis）を扱うポート。
 type RateLimitRepository interface {
-	Allow(ctx context.Context, key string) (allowed bool, tokens float64, retryAfterMS int64, err error)
+	Allow(ctx context.Context, key string, rate float64, capacity float64, cost float64, nowMS int64) (allowed bool, tokens float64, retryAfterMS int64, err error)
 }
 
 type RedisTokenBucketRepository struct {
-	rdb      *redis.Client
-	capacity int
-	refill   float64
+	rdb *redis.Client
 }
 
 func NewRedisTokenBucketRepository(rdb *redis.Client, capacity int, refillPerSec float64) *RedisTokenBucketRepository {
-	return &RedisTokenBucketRepository{rdb: rdb, capacity: capacity, refill: refillPerSec}
+	_ = capacity
+	_ = refillPerSec
+	return &RedisTokenBucketRepository{rdb: rdb}
 }
 
 var tokenBucketScript = redis.NewScript(`
@@ -70,19 +70,20 @@ redis.call("PEXPIRE", key, ttl_ms)
 return {allowed, tokens, retry_after_ms}
 `)
 
-func (r *RedisTokenBucketRepository) Allow(ctx context.Context, key string) (bool, float64, int64, error) {
+func (r *RedisTokenBucketRepository) Allow(ctx context.Context, key string, rate float64, capacity float64, cost float64, nowMS int64) (bool, float64, int64, error) {
 	if r.rdb == nil {
 		return false, 0, 0, errors.New("redis client is nil")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 150*time.Millisecond)
 	defer cancel()
-	now := time.Now().UTC().UnixMilli()
-	const cost = 1.0
 	res, err := tokenBucketScript.Run(
 		ctx,
 		r.rdb,
 		[]string{"rate:" + key},
-		strconv.FormatFloat(r.refill, 'f', -1, 64), r.capacity, strconv.FormatFloat(cost, 'f', -1, 64), now,
+		strconv.FormatFloat(rate, 'f', -1, 64),
+		strconv.FormatFloat(capacity, 'f', -1, 64),
+		strconv.FormatFloat(cost, 'f', -1, 64),
+		nowMS,
 	).Result()
 	if err != nil {
 		return false, 0, 0, err
