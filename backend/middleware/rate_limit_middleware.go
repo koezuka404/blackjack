@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"strconv"
 
 	"blackjack/backend/dto"
 	"blackjack/backend/usecase"
@@ -19,11 +20,12 @@ func RateLimitMiddleware(limiter usecase.RateLimitUsecase) echo.MiddlewareFunc {
 			if userID == "" {
 				return next(c)
 			}
-			ok, err := limiter.Allow(c.Request().Context(), "http:"+userID)
+			result, err := limiter.Allow(c.Request().Context(), "http:"+userID)
 			if err != nil {
 				return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
 			}
-			if !ok {
+			if !result.Allowed {
+				c.Response().Header().Set("X-RateLimit-Retry-After-Ms", strconv.FormatInt(result.RetryAfterMS, 10))
 				return c.JSON(http.StatusTooManyRequests, dto.Fail("rate_limited", "too many requests"))
 			}
 			return next(c)

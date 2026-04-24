@@ -164,11 +164,12 @@ func (r *RoomController) RoomWS(c echo.Context) error {
 	}
 	preKey := preWSConnectionKey(c)
 	if r.limiter != nil {
-		ok, err := r.limiter.Allow(c.Request().Context(), preKey)
+		result, err := r.limiter.Allow(c.Request().Context(), preKey)
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
 		}
-		if !ok {
+		if !result.Allowed {
+			c.Response().Header().Set("X-RateLimit-Retry-After-Ms", strconv.FormatInt(result.RetryAfterMS, 10))
 			return c.JSON(http.StatusTooManyRequests, dto.Fail("rate_limited", "too many websocket connection attempts"))
 		}
 	}
@@ -207,14 +208,14 @@ func (r *RoomController) RoomWS(c echo.Context) error {
 		return nil
 	}
 	if r.limiter != nil {
-		ok, err := r.limiter.Allow(c.Request().Context(), "ws-open:"+userID)
+		result, err := r.limiter.Allow(c.Request().Context(), "ws-open:"+userID)
 		if err != nil {
 			sendWSError(conn, preMeta, dto.WSErrorInternal, err.Error())
 			_ = conn.Close()
 			return nil
 		}
-		if !ok {
-			sendWSError(conn, preMeta, dto.WSErrorRateLimited, "too many websocket connection attempts")
+		if !result.Allowed {
+			sendWSErrorWithRetry(conn, preMeta, dto.WSErrorRateLimited, "too many websocket connection attempts", result.RetryAfterMS)
 			_ = conn.Close()
 			return nil
 		}
@@ -276,13 +277,13 @@ func (r *RoomController) RoomWS(c echo.Context) error {
 			}
 			if r.limiter != nil {
 				// WS更新イベントにもRedis token bucketを適用する
-				ok, err := r.limiter.Allow(context.Background(), "ws:"+userID)
+				result, err := r.limiter.Allow(context.Background(), "ws:"+userID)
 				if err != nil {
 					sendWSError(conn, meta, dto.WSErrorInternal, err.Error())
 					continue
 				}
-				if !ok {
-					sendWSError(conn, meta, dto.WSErrorRateLimited, "too many requests")
+				if !result.Allowed {
+					sendWSErrorWithRetry(conn, meta, dto.WSErrorRateLimited, "too many requests", result.RetryAfterMS)
 					continue
 				}
 			}
@@ -369,12 +370,21 @@ func writeWS(conn *websocket.Conn, meta wsConnMeta, payload []byte) error {
 
 // sendWSError は WS 用の ERROR ペイロードを送る。
 func sendWSError(conn *websocket.Conn, meta wsConnMeta, code, message string) {
+	sendWSErrorWithRetryPtr(conn, meta, code, message, nil)
+}
+
+func sendWSErrorWithRetry(conn *websocket.Conn, meta wsConnMeta, code, message string, retryAfterMS int64) {
+	sendWSErrorWithRetryPtr(conn, meta, code, message, &retryAfterMS)
+}
+
+func sendWSErrorWithRetryPtr(conn *websocket.Conn, meta wsConnMeta, code, message string, retryAfterMS *int64) {
 	// エラー契約は { type: "ERROR", error: { code, message } } で固定
 	b, err := json.Marshal(dto.WSErrorEvent{
 		Type: dto.WSEventError,
 		Error: dto.WSErrorBody{
-			Code:    code,
-			Message: message,
+			Code:         code,
+			Message:      message,
+			RetryAfterMS: retryAfterMS,
 		},
 	})
 	if err != nil {
