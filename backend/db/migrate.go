@@ -23,7 +23,21 @@ func Migrate(gdb *gorm.DB) error {
 	); err != nil {
 		return err
 	}
-	return ensureForeignKeys(gdb)
+	if err := ensureForeignKeys(gdb); err != nil {
+		return err
+	}
+	return ensurePlayerStatesSessionSeatUniqueIndex(gdb)
+}
+
+// ensurePlayerStatesSessionSeatUniqueIndex replaces a mistaken GORM definition where
+// uniqueIndex:ux_player_session_seat lived only on seat_no, which enforced uniqueness
+// of seat numbers across all sessions. The correct invariant is unique (session_id, seat_no).
+func ensurePlayerStatesSessionSeatUniqueIndex(gdb *gorm.DB) error {
+	_ = gdb.Exec(`ALTER TABLE player_states DROP CONSTRAINT IF EXISTS ux_player_session_seat`).Error
+	_ = gdb.Exec(`DROP INDEX IF EXISTS ux_player_session_seat`).Error
+	return gdb.Exec(
+		`CREATE UNIQUE INDEX IF NOT EXISTS ux_player_session_seat ON player_states (session_id, seat_no)`,
+	).Error
 }
 
 func ensureForeignKeys(gdb *gorm.DB) error {

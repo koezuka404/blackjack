@@ -47,7 +47,7 @@ type GameSessionRecord struct {
 func (GameSessionRecord) TableName() string { return "game_sessions" }
 
 type PlayerStateRecord struct {
-	SessionID  string  `gorm:"type:uuid;not null;column:session_id;primaryKey"`
+	SessionID  string  `gorm:"type:uuid;not null;column:session_id;primaryKey;uniqueIndex:ux_player_session_seat"`
 	UserID     string  `gorm:"type:uuid;not null;column:user_id;primaryKey"`
 	SeatNo     int     `gorm:"not null;column:seat_no;uniqueIndex:ux_player_session_seat"`
 	Hand       []byte  `gorm:"type:jsonb;not null"`
