@@ -46,7 +46,7 @@ func skipJWTAuth(c echo.Context) bool {
 	switch p {
 	case "/api/auth/login", "/api/auth/signup":
 		return true
-	case "/ws/rooms/:id":
+	case "/ws/rooms/:id", "/api/ws/rooms/:id":
 		return true
 	default:
 		return false
