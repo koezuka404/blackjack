@@ -18,6 +18,8 @@ var ErrUnauthorized = errors.New("unauthorized")
 var ErrInvalidInput = errors.New("invalid_input")
 var ErrUsernameTaken = errors.New("username_taken")
 
+var signupHashPassword = bcrypt.GenerateFromPassword
+
 type AuthResponse interface {
 	SessionToken() string
 	ExpiresAt() time.Time
@@ -62,7 +64,7 @@ func (u *authService) Signup(ctx context.Context, username, password string) (Au
 	if len(username) < 3 || len(username) > 100 || len(password) < 8 {
 		return nil, ErrInvalidInput
 	}
-	pwHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	pwHash, err := signupHashPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return nil, err
 	}

@@ -7,18 +7,25 @@ import (
 	"blackjack/backend/db"
 )
 
+var (
+	openDB    = db.Open
+	migrateDB = db.Migrate
+)
+
+func run(dsn string) error {
+	if dsn == "" {
+		return os.ErrInvalid
+	}
+	gdb, err := openDB(dsn)
+	if err != nil {
+		return err
+	}
+	return migrateDB(gdb)
+}
+
 func main() {
 	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		log.Fatal("DATABASE_URL is required")
-	}
-
-	gdb, err := db.Open(dsn)
-	if err != nil {
-		log.Fatalf("database: %v", err)
-	}
-
-	if err := db.Migrate(gdb); err != nil {
+	if err := run(dsn); err != nil {
 		log.Fatalf("migrate: %v", err)
 	}
 

@@ -339,7 +339,7 @@ func (r *RoomController) broadcastRoomStateLocal(ctx context.Context, roomID, ac
 		}
 		payload := dto.WSRoomStateSyncEvent{
 			Type: eventType,
-			Data: buildRoomStateSyncDTO(state, meta.userID),
+			Data: buildRoomDTO(state, meta.userID),
 		}
 		b, err := json.Marshal(payload)
 		if err != nil {
@@ -402,8 +402,8 @@ func sendWSPong(conn *websocket.Conn, meta wsConnMeta) {
 	_ = writeWS(conn, meta, b)
 }
 
-// buildRoomStateSyncDTO は閲覧者ごとの手札公開範囲を反映した同期ペイロードを組み立てる。
-func buildRoomStateSyncDTO(s *usecase.RoomState, userID string) dto.RoomStateSyncPayload {
+// buildRoomDTO は閲覧者ごとの手札公開範囲を反映した同期ペイロードを組み立てる。
+func buildRoomDTO(s *usecase.RoomState, userID string) dto.RoomStateSyncPayload {
 	out := dto.RoomStateSyncPayload{
 		Room: dto.RoomJSON{ID: s.Room.ID, Status: string(s.Room.Status)},
 		Session: dto.RoomStateSyncSessionJSON{

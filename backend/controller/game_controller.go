@@ -154,9 +154,7 @@ func (r *RoomController) RematchVote(c echo.Context) error {
 	room, sess, err := r.room.VoteRematch(c.Request().Context(), roomID, userID, req.Agree, req.ExpectedVersion, req.ActionID)
 	if err != nil {
 		middleware.SetAuditSessionVersions(c, &req.ExpectedVersion, &req.ExpectedVersion)
-		if resp := writeTurnMutationError(c, err, "invalid rematch vote payload", "rematch voting is unavailable"); resp != nil {
-			return resp
-		}
+		return writeTurnMutationError(c, err, "invalid rematch vote payload", "rematch voting is unavailable")
 	}
 	middleware.SetAuditSessionVersions(c, &req.ExpectedVersion, &sess.Version)
 	setAuditGameSessionID(c, sess)
@@ -193,9 +191,7 @@ func (r *RoomController) turnAction(c echo.Context, hit bool) error {
 	}
 	if err != nil {
 		middleware.SetAuditSessionVersions(c, &req.ExpectedVersion, &req.ExpectedVersion)
-		if resp := writeTurnMutationError(c, err, "room id and expected_version are required", ""); resp != nil {
-			return resp
-		}
+		return writeTurnMutationError(c, err, "room id and expected_version are required", "")
 	}
 	middleware.SetAuditSessionVersions(c, &req.ExpectedVersion, &sess.Version)
 	setAuditGameSessionID(c, sess)

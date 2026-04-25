@@ -76,11 +76,11 @@ func (u *rateLimitService) Allow(ctx context.Context, key string) (RateLimitResu
 }
 
 func (u *rateLimitService) AllowSignup(ctx context.Context, ip string, email string) (RateLimitDecision, error) {
-	return u.allowByIPAndEmail(ctx, "signup", ip, email, u.signupRate, u.signupCapacity)
+	return u.allowUsername(ctx, "signup", ip, email, u.signupRate, u.signupCapacity)
 }
 
 func (u *rateLimitService) AllowLogin(ctx context.Context, ip string, email string) (RateLimitDecision, error) {
-	return u.allowByIPAndEmail(ctx, "login", ip, email, u.loginRate, u.loginCapacity)
+	return u.allowUsername(ctx, "login", ip, email, u.loginRate, u.loginCapacity)
 }
 
 func (u *rateLimitService) AllowTasks(ctx context.Context, userID uint) (RateLimitDecision, error) {
@@ -97,7 +97,7 @@ func (u *rateLimitService) AllowTasks(ctx context.Context, userID uint) (RateLim
 	}, nil
 }
 
-func (u *rateLimitService) allowByIPAndEmail(
+func (u *rateLimitService) allowUsername(
 	ctx context.Context,
 	action string,
 	ip string,
