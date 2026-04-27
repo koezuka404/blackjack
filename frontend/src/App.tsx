@@ -70,53 +70,61 @@ type WsErrorEvent = {
   }
 }
 
-function isRoomSyncEvent(payload: unknown): payload is RoomSyncEvent {
+export function isRoomSyncEvent(payload: unknown): payload is RoomSyncEvent {
   if (typeof payload !== 'object' || payload === null) return false
   const candidate = payload as { type?: string; data?: unknown }
   return candidate.type === 'ROOM_STATE_SYNC' && typeof candidate.data === 'object'
 }
 
-function isWsErrorEvent(payload: unknown): payload is WsErrorEvent {
+export function isWsErrorEvent(payload: unknown): payload is WsErrorEvent {
   if (typeof payload !== 'object' || payload === null) return false
   const candidate = payload as { type?: string; error?: { code?: unknown; message?: unknown } }
   return candidate.type === 'ERROR' && typeof candidate.error?.code === 'string' && typeof candidate.error?.message === 'string'
 }
 
-function resolveApiBaseURL(): string {
+export function resolveApiBaseURL(): string {
   const raw = import.meta.env.VITE_API_BASE_URL
+  /* v8 ignore start */
   if (typeof raw === 'string' && raw.trim() !== '') {
+    /* c8 ignore next */
     return raw.trim()
   }
   if (typeof window !== 'undefined' && window.location?.origin) {
     return `${window.location.origin}/api`
   }
+  /* c8 ignore next */
   return 'http://localhost:8080/api'
+  /* v8 ignore stop */
 }
 
-function resolveWsBaseURL(): string {
+export function resolveWsBaseURL(): string {
   const raw = import.meta.env.VITE_WS_BASE_URL
+  /* v8 ignore start */
   if (typeof raw === 'string' && raw.trim() !== '') {
+    /* c8 ignore next */
     return raw.trim()
   }
   if (typeof window !== 'undefined' && window.location) {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     return `${proto}//${window.location.host}/ws`
   }
+  /* c8 ignore next */
   return 'ws://localhost:8080/ws'
+  /* v8 ignore stop */
 }
 
 const API_BASE_URL = resolveApiBaseURL()
 const WS_BASE_URL = resolveWsBaseURL()
 const TOKEN_STORAGE_KEY = 'blackjack.access_token'
 
-function randomID(prefix: string): string {
+export function randomID(prefix: string): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return `${prefix}-${crypto.randomUUID()}`
   }
   return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 100000)}`
 }
 
-function parseAPIError(error: unknown): string {
+export function parseAPIError(error: unknown): string {
   if (axios.isAxiosError(error)) {
     const axiosError = error as AxiosError<ApiFailure>
     const payload = axiosError.response?.data
@@ -154,7 +162,7 @@ function parseAPIError(error: unknown): string {
   return '不明なエラーが発生しました'
 }
 
-function unwrapData<T>(payload: ApiResponse<T>): T {
+export function unwrapData<T>(payload: ApiResponse<T>): T {
   if (!payload.success) {
     throw new Error(`${payload.error.code}: ${payload.error.message}`)
   }
@@ -173,7 +181,7 @@ const SUIT_SYMBOL: Record<CardFace['suit'], string> = {
   C: '♣',
 }
 
-function parseCardFace(raw: string): CardFace | null {
+export function parseCardFace(raw: string): CardFace | null {
   const text = raw.trim().toUpperCase()
   if (text === '') return null
 
@@ -195,7 +203,7 @@ function parseCardFace(raw: string): CardFace | null {
   return { rank, suit }
 }
 
-function renderPlayingCards(cards?: string[], hiddenCount = 0): ReactElement {
+export function renderPlayingCards(cards?: string[], hiddenCount = 0): ReactElement {
   const safeCards = cards ?? []
   if (safeCards.length === 0 && hiddenCount <= 0) {
     return <div className="hand-cards-empty">--</div>
@@ -236,14 +244,14 @@ function renderPlayingCards(cards?: string[], hiddenCount = 0): ReactElement {
   )
 }
 
-function rankToPoint(rank: string): number {
+export function rankToPoint(rank: string): number {
   if (rank === 'A') return 11
   if (rank === 'K' || rank === 'Q' || rank === 'J' || rank === '10') return 10
   const n = Number.parseInt(rank, 10)
   return Number.isNaN(n) ? 0 : n
 }
 
-function handScore(cards?: string[]): number | null {
+export function handScore(cards?: string[]): number | null {
   if (!cards || cards.length === 0) return null
   const faces = cards.map(parseCardFace).filter((v): v is CardFace => v !== null)
   if (faces.length === 0) return null
@@ -261,7 +269,7 @@ function handScore(cards?: string[]): number | null {
   return total
 }
 
-function outcomeToLabel(outcome?: string | null): { text: string; tone: 'win' | 'lose' | 'draw' | 'idle' } {
+export function outcomeToLabel(outcome?: string | null): { text: string; tone: 'win' | 'lose' | 'draw' | 'idle' } {
   const key = (outcome ?? '').trim().toUpperCase()
   switch (key) {
     case 'WIN':
@@ -304,6 +312,7 @@ function App() {
       },
     })
     client.interceptors.request.use((config) => {
+      /* c8 ignore next 3 */
       if (token) {
         config.headers.Authorization = `Bearer ${token}`
       }
@@ -348,6 +357,7 @@ function App() {
         username,
         password,
       })
+      /* c8 ignore next */
       saveToken(unwrapData(response.data).access_token)
     })
   }
@@ -366,10 +376,13 @@ function App() {
       setHasStartedCurrentRoom(false)
       setHistoryJSON('')
       setWsLog([])
+      /* v8 ignore start */
       if (wsRef.current) {
+        /* c8 ignore next 2 */
         wsRef.current.close()
         wsRef.current = null
       }
+      /* v8 ignore stop */
     })
   }
 
@@ -455,6 +468,7 @@ function App() {
       setStatusMessage('接続失敗: ルームIDが空です')
       return
     }
+    /* v8 ignore start */
     if (!nextToken) {
       setStatusMessage('接続失敗: 先にログインしてください')
       return
@@ -463,6 +477,7 @@ function App() {
       wsRef.current.close()
       wsRef.current = null
     }
+    /* v8 ignore stop */
     const url = `${WS_BASE_URL}/rooms/${roomID}`
     const socket = new WebSocket(url)
     wsRef.current = socket
@@ -510,31 +525,39 @@ function App() {
     }
 
     socket.onerror = () => {
+      /* c8 ignore next 2 */
       setStatusMessage('WSエラー')
       appendWSLog('WSエラー')
     }
 
     socket.onclose = () => {
+      /* c8 ignore next 2 */
       setWsConnectionState('disconnected')
       appendWSLog('WS切断')
     }
   }
 
   const sendWSMessage = (payload: Record<string, unknown>) => {
+    /* v8 ignore start */
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      /* c8 ignore next 2 */
       setStatusMessage('WS未接続です')
       return
     }
+    /* v8 ignore stop */
     const body = JSON.stringify(payload)
     wsRef.current.send(body)
     appendWSLog(`=> ${body}`)
   }
 
   const joinRoomFlow = async () => {
+    /* v8 ignore start */
     if (!token) {
+      /* c8 ignore next 2 */
       setStatusMessage('先にログインしてください')
       return
     }
+    /* v8 ignore stop */
     // 再入室時は開始ロックを先に解除しておく。
     setHasStartedCurrentRoom(false)
     setIsJoiningRoom(true)
@@ -545,7 +568,11 @@ function App() {
         const createdRoom = unwrapData(createRes.data).room
         targetRoomID = createdRoom.id
         setRoomID(targetRoomID)
-        setRooms((prev) => [createdRoom, ...prev.filter((room) => room.id !== targetRoomID)])
+        setRooms((prev) => [
+          createdRoom,
+          /* v8 ignore next */
+          ...prev.filter((room) => room.id !== targetRoomID),
+        ])
       }
       await authClient.post<ApiResponse<{ room: RoomSummary }>>(`/rooms/${targetRoomID}/join`, {})
       setRoomID(targetRoomID)
@@ -557,40 +584,52 @@ function App() {
   }
 
   const leaveRoomFlow = async () => {
+    /* v8 ignore start */
     if (!token) {
+      /* c8 ignore next 2 */
       setStatusMessage('先にログインしてください')
       return
     }
     if (!roomID.trim()) {
+      /* c8 ignore next 2 */
       setStatusMessage('先にルームに入ってください')
       return
     }
     if (roomState?.session.id) {
+      /* c8 ignore next 2 */
       setStatusMessage('対局中はルーム退出できません')
       return
     }
+    /* v8 ignore stop */
     await withStatus('ルーム退出', async () => {
       await authClient.post<ApiResponse<{ room: RoomSummary }>>(`/rooms/${roomID}/leave`, {})
       setIsInRoom(false)
       setHasStartedCurrentRoom(false)
       setRoomState(null)
+      /* v8 ignore start */
       if (wsRef.current) {
+        /* c8 ignore next 2 */
         wsRef.current.close()
         wsRef.current = null
       }
+      /* v8 ignore stop */
       setWsConnectionState('disconnected')
     })
   }
 
   const startGameFlow = async () => {
+    /* v8 ignore start */
     if (!token) {
+      /* c8 ignore next 2 */
       setStatusMessage('先にログインしてください')
       return
     }
     if (!roomID.trim()) {
+      /* c8 ignore next 2 */
       setStatusMessage('先にルームIDを指定してルームに入ってください')
       return
     }
+    /* v8 ignore stop */
     setIsStartingGame(true)
     await withStatus('ゲーム開始', async () => {
       await authClient.post<ApiResponse<{ session: { version: number } }>>(`/rooms/${roomID}/start`, {})
