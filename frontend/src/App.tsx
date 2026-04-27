@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
-import type { FormEvent } from 'react'
+import type { FormEvent, ReactElement } from 'react'
 import axios, { AxiosError } from 'axios'
 import './App.css'
 
@@ -82,8 +82,31 @@ function isWsErrorEvent(payload: unknown): payload is WsErrorEvent {
   return candidate.type === 'ERROR' && typeof candidate.error?.code === 'string' && typeof candidate.error?.message === 'string'
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080/api'
-const WS_BASE_URL = import.meta.env.VITE_WS_BASE_URL ?? 'ws://localhost:8080/ws'
+function resolveApiBaseURL(): string {
+  const raw = import.meta.env.VITE_API_BASE_URL
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    return raw.trim()
+  }
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return `${window.location.origin}/api`
+  }
+  return 'http://localhost:8080/api'
+}
+
+function resolveWsBaseURL(): string {
+  const raw = import.meta.env.VITE_WS_BASE_URL
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    return raw.trim()
+  }
+  if (typeof window !== 'undefined' && window.location) {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    return `${proto}//${window.location.host}/ws`
+  }
+  return 'ws://localhost:8080/ws'
+}
+
+const API_BASE_URL = resolveApiBaseURL()
+const WS_BASE_URL = resolveWsBaseURL()
 const TOKEN_STORAGE_KEY = 'blackjack.access_token'
 
 function randomID(prefix: string): string {
@@ -97,17 +120,38 @@ function parseAPIError(error: unknown): string {
   if (axios.isAxiosError(error)) {
     const axiosError = error as AxiosError<ApiFailure>
     const payload = axiosError.response?.data
-    if (payload?.error?.message) {
-      return `${payload.error.code}: ${payload.error.message}`
+    if (payload?.error?.code) {
+      switch (payload.error.code) {
+        case 'username_taken':
+          return 'このユーザー名は既に使われています'
+        case 'invalid_input':
+          return '入力内容が正しくありません'
+        case 'unauthorized':
+          return ''
+        case 'forbidden':
+          return 'この操作は許可されていません'
+        case 'invalid_game_state':
+          return '現在の状態ではこの操作はできません'
+        case 'room_full':
+          return 'ルームが満員です'
+        case 'not_found':
+          return '対象データが見つかりません'
+        case 'rate_limited':
+          return 'アクセスが多すぎます。少し待ってください'
+        case 'internal_error':
+          return 'サーバーエラーが発生しました'
+        default:
+          return payload.error.message || 'エラーが発生しました'
+      }
     }
     if (axiosError.message) {
-      return axiosError.message
+      return '通信エラーが発生しました'
     }
   }
   if (error instanceof Error) {
-    return error.message
+    return error.message || 'エラーが発生しました'
   }
-  return 'unknown error'
+  return '不明なエラーが発生しました'
 }
 
 function unwrapData<T>(payload: ApiResponse<T>): T {
@@ -117,17 +161,139 @@ function unwrapData<T>(payload: ApiResponse<T>): T {
   return payload.data
 }
 
+type CardFace = {
+  rank: string
+  suit: 'S' | 'H' | 'D' | 'C'
+}
+
+const SUIT_SYMBOL: Record<CardFace['suit'], string> = {
+  S: '♠',
+  H: '♥',
+  D: '♦',
+  C: '♣',
+}
+
+function parseCardFace(raw: string): CardFace | null {
+  const text = raw.trim().toUpperCase()
+  if (text === '') return null
+
+  const normalized = text
+    .replace(/SPADES?|SPADE/g, 'S')
+    .replace(/HEARTS?|HEART/g, 'H')
+    .replace(/DIAMONDS?|DIAMOND/g, 'D')
+    .replace(/CLUBS?|CLUB/g, 'C')
+    .replace(/[♠]/g, 'S')
+    .replace(/[♥]/g, 'H')
+    .replace(/[♦]/g, 'D')
+    .replace(/[♣]/g, 'C')
+    .replace(/[^0-9JQKASHDC]/g, '')
+
+  const m = normalized.match(/(10|[2-9JQKA])([SHDC])$/)
+  if (!m) return null
+  const rank = m[1]
+  const suit = m[2] as CardFace['suit']
+  return { rank, suit }
+}
+
+function renderPlayingCards(cards?: string[], hiddenCount = 0): ReactElement {
+  const safeCards = cards ?? []
+  if (safeCards.length === 0 && hiddenCount <= 0) {
+    return <div className="hand-cards-empty">--</div>
+  }
+  return (
+    <div className="playing-cards">
+      {safeCards.map((raw, idx) => {
+        const parsed = parseCardFace(raw)
+        if (!parsed) {
+          return (
+            <div key={`raw-${idx}-${raw}`} className="playing-card card-back" aria-label="unknown-card">
+              <span className="card-center">?</span>
+            </div>
+          )
+        }
+        const suitSymbol = SUIT_SYMBOL[parsed.suit]
+        const red = parsed.suit === 'H' || parsed.suit === 'D'
+        return (
+          <div key={`face-${idx}-${raw}`} className={`playing-card ${red ? 'card-red' : 'card-black'}`} aria-label={raw}>
+            <span className="card-corner card-corner-top">
+              {parsed.rank}
+              {suitSymbol}
+            </span>
+            <span className="card-center">{suitSymbol}</span>
+            <span className="card-corner card-corner-bottom">
+              {parsed.rank}
+              {suitSymbol}
+            </span>
+          </div>
+        )
+      })}
+      {Array.from({ length: hiddenCount }).map((_, idx) => (
+        <div key={`hidden-${idx}`} className="playing-card card-back" aria-label="hidden-card">
+          <span className="card-center">🂠</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function rankToPoint(rank: string): number {
+  if (rank === 'A') return 11
+  if (rank === 'K' || rank === 'Q' || rank === 'J' || rank === '10') return 10
+  const n = Number.parseInt(rank, 10)
+  return Number.isNaN(n) ? 0 : n
+}
+
+function handScore(cards?: string[]): number | null {
+  if (!cards || cards.length === 0) return null
+  const faces = cards.map(parseCardFace).filter((v): v is CardFace => v !== null)
+  if (faces.length === 0) return null
+
+  let total = 0
+  let aces = 0
+  for (const c of faces) {
+    total += rankToPoint(c.rank)
+    if (c.rank === 'A') aces++
+  }
+  while (total > 21 && aces > 0) {
+    total -= 10
+    aces--
+  }
+  return total
+}
+
+function outcomeToLabel(outcome?: string | null): { text: string; tone: 'win' | 'lose' | 'draw' | 'idle' } {
+  const key = (outcome ?? '').trim().toUpperCase()
+  switch (key) {
+    case 'WIN':
+    case 'BLACKJACK':
+      return { text: 'あなたの勝ち', tone: 'win' }
+    case 'LOSE':
+    case 'BUST':
+      return { text: 'あなたの負け', tone: 'lose' }
+    case 'PUSH':
+    case 'DRAW':
+      return { text: '引き分け', tone: 'draw' }
+    default:
+      return { text: '', tone: 'idle' }
+  }
+}
+
 function App() {
   const [username, setUsername] = useState('pm_user_01')
   const [password, setPassword] = useState('password12')
   const [token, setToken] = useState(localStorage.getItem(TOKEN_STORAGE_KEY) ?? '')
   const [roomID, setRoomID] = useState('')
-  const [statusMessage, setStatusMessage] = useState('Ready')
+  const [statusMessage, setStatusMessage] = useState('')
+  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login')
   const [rooms, setRooms] = useState<RoomSummary[]>([])
   const [roomState, setRoomState] = useState<RoomStateSync | null>(null)
   const [historyJSON, setHistoryJSON] = useState('')
   const [wsLog, setWsLog] = useState<string[]>([])
   const [wsConnectionState, setWsConnectionState] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected')
+  const [isJoiningRoom, setIsJoiningRoom] = useState(false)
+  const [isStartingGame, setIsStartingGame] = useState(false)
+  const [isInRoom, setIsInRoom] = useState(false)
+  const [hasStartedCurrentRoom, setHasStartedCurrentRoom] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
 
   const authClient = useMemo(() => {
@@ -157,16 +323,17 @@ function App() {
 
   const withStatus = async (label: string, task: () => Promise<void>) => {
     try {
-      setStatusMessage(`${label}...`)
+      setStatusMessage(`${label}中...`)
       await task()
-      setStatusMessage(`${label} done`)
+      setStatusMessage('')
     } catch (error) {
-      setStatusMessage(`${label} failed: ${parseAPIError(error)}`)
+      const message = parseAPIError(error).trim()
+      setStatusMessage(message)
     }
   }
 
   const signup = async () => {
-    await withStatus('Signup', async () => {
+    await withStatus('新規登録', async () => {
       const response = await authClient.post<ApiResponse<LoginResponse>>('/auth/signup', {
         username,
         password,
@@ -176,7 +343,7 @@ function App() {
   }
 
   const login = async () => {
-    await withStatus('Login', async () => {
+    await withStatus('ログイン', async () => {
       const response = await authClient.post<ApiResponse<LoginResponse>>('/auth/login', {
         username,
         password,
@@ -186,27 +353,35 @@ function App() {
   }
 
   const logout = async () => {
-    await withStatus('Logout', async () => {
+    await withStatus('ログアウト', async () => {
       await authClient.post('/auth/logout')
       setToken('')
       localStorage.removeItem(TOKEN_STORAGE_KEY)
+      setUsername('')
+      setPassword('')
+      setRoomID('')
+      setRooms([])
       setRoomState(null)
+      setIsInRoom(false)
+      setHasStartedCurrentRoom(false)
+      setHistoryJSON('')
       setWsLog([])
       if (wsRef.current) {
         wsRef.current.close()
+        wsRef.current = null
       }
     })
   }
 
   const listRooms = async () => {
-    await withStatus('List rooms', async () => {
+    await withStatus('ルーム一覧取得', async () => {
       const response = await authClient.get<ApiResponse<{ rooms: RoomSummary[] }>>('/rooms')
       setRooms(unwrapData(response.data).rooms)
     })
   }
 
   const createRoom = async () => {
-    await withStatus('Create room', async () => {
+    await withStatus('ルーム作成', async () => {
       const response = await authClient.post<ApiResponse<{ room: RoomSummary }>>('/rooms', {})
       const data = unwrapData(response.data)
       const nextRoomID = data.room.id
@@ -216,14 +391,14 @@ function App() {
   }
 
   const joinRoom = async () => {
-    await withStatus('Join room', async () => {
+    await withStatus('ルーム参加', async () => {
       const response = await authClient.post<ApiResponse<{ room: RoomSummary }>>(`/rooms/${roomID}/join`, {})
       unwrapData(response.data)
     })
   }
 
   const startRoom = async () => {
-    await withStatus('Start room', async () => {
+    await withStatus('ゲーム開始', async () => {
       const response = await authClient.post<ApiResponse<{ session: { version: number } }>>(`/rooms/${roomID}/start`, {})
       unwrapData(response.data)
       await fetchRoom()
@@ -231,30 +406,31 @@ function App() {
   }
 
   const fetchRoom = async () => {
-    await withStatus('Get room', async () => {
+    await withStatus('ルーム情報取得', async () => {
       const response = await authClient.get<ApiResponse<Record<string, unknown>>>(`/rooms/${roomID}`)
       setHistoryJSON(JSON.stringify(response.data, null, 2))
     })
   }
 
   const fetchHistory = async () => {
-    await withStatus('Get room history', async () => {
+    await withStatus('履歴取得', async () => {
       const response = await authClient.get<ApiResponse<Record<string, unknown>>>(`/rooms/${roomID}/history`)
       setHistoryJSON(JSON.stringify(response.data, null, 2))
     })
   }
 
   const fetchHint = async () => {
-    await withStatus('Get play hint', async () => {
+    await withStatus('ヒント取得', async () => {
       const response = await authClient.get<ApiResponse<Record<string, unknown>>>(`/rooms/${roomID}/play_hint`)
       setHistoryJSON(JSON.stringify(response.data, null, 2))
     })
   }
 
   const expectedVersion = roomState?.session.version ?? 0
+  const me = roomState?.players.find((p) => p.is_me)
 
   const hitByHTTP = async () => {
-    await withStatus('HIT', async () => {
+    await withStatus('ヒット', async () => {
       const response = await authClient.post(`/rooms/${roomID}/hit`, {
         action_id: randomID('http-hit'),
         expected_version: expectedVersion,
@@ -264,7 +440,7 @@ function App() {
   }
 
   const standByHTTP = async () => {
-    await withStatus('STAND', async () => {
+    await withStatus('スタンド', async () => {
       const response = await authClient.post(`/rooms/${roomID}/stand`, {
         action_id: randomID('http-stand'),
         expected_version: expectedVersion,
@@ -273,13 +449,14 @@ function App() {
     })
   }
 
-  const connectWebSocket = () => {
+  const connectWebSocket = (authToken?: string) => {
+    const nextToken = authToken ?? token
     if (!roomID) {
-      setStatusMessage('Connect WS failed: room_id is empty')
+      setStatusMessage('接続失敗: ルームIDが空です')
       return
     }
-    if (!token) {
-      setStatusMessage('Connect WS failed: login first')
+    if (!nextToken) {
+      setStatusMessage('接続失敗: 先にログインしてください')
       return
     }
     if (wsRef.current) {
@@ -294,15 +471,27 @@ function App() {
 
     socket.onopen = () => {
       setWsConnectionState('connected')
-      appendWSLog('WS connected')
+      appendWSLog('WS接続完了')
       socket.send(
         JSON.stringify({
           type: 'AUTH',
           request_id: randomID('auth'),
-          access_token: token,
+          access_token: nextToken,
         }),
       )
-      appendWSLog('AUTH sent')
+      appendWSLog('認証メッセージ送信')
+      // 認証直後に同期要求を投げ、初期表示の体感待ちを減らす。
+      setTimeout(() => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(
+            JSON.stringify({
+              type: 'ROOM_SYNC_REQUEST',
+              request_id: randomID('auto-sync'),
+            }),
+          )
+          appendWSLog('初期同期リクエスト送信')
+        }
+      }, 120)
     }
 
     socket.onmessage = (event) => {
@@ -313,7 +502,7 @@ function App() {
         if (isRoomSyncEvent(parsed)) {
           setRoomState(parsed.data)
         } else if (isWsErrorEvent(parsed)) {
-          setStatusMessage(`WS error: ${parsed.error.code} ${parsed.error.message}`)
+          setStatusMessage('WebSocketエラーが発生しました')
         }
       } catch {
         // no-op
@@ -321,19 +510,19 @@ function App() {
     }
 
     socket.onerror = () => {
-      setStatusMessage('WS error')
-      appendWSLog('WS error')
+      setStatusMessage('WSエラー')
+      appendWSLog('WSエラー')
     }
 
     socket.onclose = () => {
       setWsConnectionState('disconnected')
-      appendWSLog('WS closed')
+      appendWSLog('WS切断')
     }
   }
 
   const sendWSMessage = (payload: Record<string, unknown>) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      setStatusMessage('WS is not connected')
+      setStatusMessage('WS未接続です')
       return
     }
     const body = JSON.stringify(payload)
@@ -341,113 +530,170 @@ function App() {
     appendWSLog(`=> ${body}`)
   }
 
+  const joinRoomFlow = async () => {
+    if (!token) {
+      setStatusMessage('先にログインしてください')
+      return
+    }
+    // 再入室時は開始ロックを先に解除しておく。
+    setHasStartedCurrentRoom(false)
+    setIsJoiningRoom(true)
+    await withStatus('ルーム参加', async () => {
+      let targetRoomID = roomID.trim()
+      if (!targetRoomID) {
+        const createRes = await authClient.post<ApiResponse<{ room: RoomSummary }>>('/rooms', {})
+        const createdRoom = unwrapData(createRes.data).room
+        targetRoomID = createdRoom.id
+        setRoomID(targetRoomID)
+        setRooms((prev) => [createdRoom, ...prev.filter((room) => room.id !== targetRoomID)])
+      }
+      await authClient.post<ApiResponse<{ room: RoomSummary }>>(`/rooms/${targetRoomID}/join`, {})
+      setRoomID(targetRoomID)
+      setIsInRoom(true)
+      setHasStartedCurrentRoom(false)
+      connectWebSocket()
+    })
+    setIsJoiningRoom(false)
+  }
+
+  const leaveRoomFlow = async () => {
+    if (!token) {
+      setStatusMessage('先にログインしてください')
+      return
+    }
+    if (!roomID.trim()) {
+      setStatusMessage('先にルームに入ってください')
+      return
+    }
+    if (roomState?.session.id) {
+      setStatusMessage('対局中はルーム退出できません')
+      return
+    }
+    await withStatus('ルーム退出', async () => {
+      await authClient.post<ApiResponse<{ room: RoomSummary }>>(`/rooms/${roomID}/leave`, {})
+      setIsInRoom(false)
+      setHasStartedCurrentRoom(false)
+      setRoomState(null)
+      if (wsRef.current) {
+        wsRef.current.close()
+        wsRef.current = null
+      }
+      setWsConnectionState('disconnected')
+    })
+  }
+
+  const startGameFlow = async () => {
+    if (!token) {
+      setStatusMessage('先にログインしてください')
+      return
+    }
+    if (!roomID.trim()) {
+      setStatusMessage('先にルームIDを指定してルームに入ってください')
+      return
+    }
+    setIsStartingGame(true)
+    await withStatus('ゲーム開始', async () => {
+      await authClient.post<ApiResponse<{ session: { version: number } }>>(`/rooms/${roomID}/start`, {})
+      setHasStartedCurrentRoom(true)
+      connectWebSocket()
+    })
+    setIsStartingGame(false)
+  }
+
   const canPlay = roomState?.my_actions.can_hit || roomState?.my_actions.can_stand
+  const isLoggedIn = token.trim() !== ''
+  const dealerVisibleCount = roomState?.dealer.visible_cards.length ?? 0
+  const dealerHiddenCount = Math.max(0, (roomState?.dealer.card_count ?? 0) - dealerVisibleCount)
+  const outcomeView = outcomeToLabel(me?.outcome)
+  const dealerScore = handScore(roomState?.dealer.visible_cards)
+  const myScore = handScore(me?.hand)
+
+  if (!isLoggedIn) {
+    return (
+      <main className="container auth-only">
+        <h1>ブラックジャック</h1>
+        {statusMessage && <p className="subtle">{statusMessage}</p>}
+
+        <section className="panel auth-card">
+          <h2>{authMode === 'login' ? 'ログイン' : '新規登録'}</h2>
+          <form
+            className="row auth-form"
+            onSubmit={(event: FormEvent<HTMLFormElement>) => {
+              event.preventDefault()
+              void (authMode === 'login' ? login() : signup())
+            }}
+          >
+            <input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="ユーザー名" />
+            <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="パスワード" type="password" />
+            <button type="submit">{authMode === 'login' ? 'ログインする' : '新規登録する'}</button>
+          </form>
+          <div className="auth-switch">
+            <button
+              type="button"
+              className="btn-auth-switch"
+              onClick={() => setAuthMode((prev) => (prev === 'login' ? 'signup' : 'login'))}
+            >
+              {authMode === 'login' ? '新規登録' : 'ログイン'}
+            </button>
+          </div>
+        </section>
+
+      </main>
+    )
+  }
 
   return (
     <main className="container">
-      <h1>BlackJack Frontend</h1>
-      <p className="subtle">{statusMessage}</p>
-
-      <section className="panel">
-        <h2>Connection Settings</h2>
-        <p className="subtle">API: {API_BASE_URL}</p>
-        <p className="subtle">WS: {WS_BASE_URL}</p>
-      </section>
-
-      <section className="panel">
-        <h2>Auth</h2>
-        <form
-          className="row"
-          onSubmit={(event: FormEvent<HTMLFormElement>) => {
-            event.preventDefault()
-            void signup()
-          }}
-        >
-          <input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="username" />
-          <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="password" type="password" />
-          <button type="submit">Signup</button>
-          <button
-            type="button"
-            onClick={() => {
-              void login()
-            }}
-          >
-            Login
-          </button>
-          <button type="button" onClick={logout}>
-            Logout
-          </button>
-        </form>
-        <p className="subtle">{token ? `Token stored (${token.slice(0, 14)}...)` : 'No token'}</p>
-      </section>
-
-      <section className="panel">
-        <h2>Room Controls</h2>
-        <div className="row">
-          <input value={roomID} onChange={(event) => setRoomID(event.target.value)} placeholder="room_id" />
-          <button onClick={createRoom}>Create</button>
-          <button onClick={listRooms}>List</button>
-          <button onClick={joinRoom} disabled={!roomID}>
-            Join
-          </button>
-          <button onClick={startRoom} disabled={!roomID}>
-            Start
-          </button>
-          <button onClick={fetchRoom} disabled={!roomID}>
-            Get Room
-          </button>
-          <button onClick={fetchHistory} disabled={!roomID}>
-            History
-          </button>
-          <button onClick={fetchHint} disabled={!roomID}>
-            Hint
+      <div className="header-row">
+        <h1>ブラックジャック</h1>
+        <div className="top-actions">
+          <button type="button" onClick={logout} className="btn-logout-standalone">
+            ログアウト
           </button>
         </div>
-        <ul className="list">
-          {rooms.map((room) => (
-            <li key={room.id}>
-              <button
-                onClick={() => {
-                  setRoomID(room.id)
-                }}
-              >
-                use
-              </button>{' '}
-              {room.id} ({room.status})
-            </li>
-          ))}
-        </ul>
-      </section>
+      </div>
+      {statusMessage && <p className="subtle">{statusMessage}</p>}
 
-      <section className="panel">
-        <h2>WebSocket</h2>
-        <p className="subtle">status: {wsConnectionState}</p>
-        <div className="row">
-          <button onClick={connectWebSocket} disabled={!roomID || !token}>
-            Connect
+      <section className="layout-main">
+        <div className="left-pane">
+          <section className="panel panel-table">
+        {outcomeView.tone !== 'idle' && <div className={`result-banner result-${outcomeView.tone}`}>{outcomeView.text}</div>}
+        <div className="row start-row">
+          <button onClick={joinRoomFlow} className="btn-join-room" disabled={isJoiningRoom || isInRoom}>
+            {isJoiningRoom ? '参加中…' : 'ルームに入る'}
+          </button>
+          <button onClick={leaveRoomFlow} className="btn-leave-room" disabled={!isInRoom || Boolean(roomState?.session.id)}>
+            ルーム退出
           </button>
           <button
-            onClick={() =>
-              sendWSMessage({
-                type: 'ROOM_SYNC_REQUEST',
-                request_id: randomID('sync'),
-              })
-            }
-            disabled={wsConnectionState !== 'connected'}
+            onClick={startGameFlow}
+            className="btn-start-game"
+            disabled={isStartingGame || hasStartedCurrentRoom || !roomID.trim()}
           >
-            Sync Request
+            {isStartingGame ? '開始中…' : hasStartedCurrentRoom ? '開始済み' : 'ゲーム開始'}
           </button>
-          <button
-            onClick={() =>
-              sendWSMessage({
-                type: 'PING',
-                request_id: randomID('ping'),
-              })
-            }
-            disabled={wsConnectionState !== 'connected'}
-          >
-            Ping
+          <button onClick={() => connectWebSocket()} disabled={!roomID || !token}>
+            再接続
           </button>
+        </div>
+        <div className="table-felt">
+          <div className="table-top-row">
+            <div className="seat dealer-seat">
+              <strong>ディーラー</strong>
+              {renderPlayingCards(roomState?.dealer.visible_cards, dealerHiddenCount)}
+              <div className="subtle">枚数: {roomState?.dealer.card_count ?? 0}</div>
+              <div className="subtle">点数: {dealerScore ?? '-'}</div>
+            </div>
+          </div>
+          <div className="table-bottom-row">
+            <div className="seat">
+              <strong>あなた</strong>
+              {renderPlayingCards(me?.hand)}
+              <div className="subtle">点数: {myScore ?? '-'}</div>
+            </div>
+          </div>
+        </div>
+        <div className="row action-row">
           <button
             onClick={() =>
               sendWSMessage({
@@ -457,9 +703,10 @@ function App() {
                 expected_version: expectedVersion,
               })
             }
-            disabled={wsConnectionState !== 'connected' || !canPlay}
+            disabled={wsConnectionState !== 'connected' || !roomState?.my_actions.can_hit}
+            className="btn-hit"
           >
-            WS HIT
+            ヒット
           </button>
           <button
             onClick={() =>
@@ -470,52 +717,171 @@ function App() {
                 expected_version: expectedVersion,
               })
             }
-            disabled={wsConnectionState !== 'connected' || !canPlay}
+            disabled={wsConnectionState !== 'connected' || !roomState?.my_actions.can_stand}
+            className="btn-stand"
           >
-            WS STAND
+            スタンド
           </button>
           <button
             onClick={() =>
               sendWSMessage({
                 type: 'REMATCH_VOTE',
-                request_id: randomID('vote'),
-                action_id: randomID('vote'),
+                request_id: randomID('vote-yes'),
+                action_id: randomID('vote-yes'),
                 expected_version: expectedVersion,
                 agree: true,
               })
             }
-            disabled={wsConnectionState !== 'connected'}
+            disabled={wsConnectionState !== 'connected' || !roomState?.my_actions.can_rematch_vote}
+            className="btn-rematch"
           >
-            Vote Rematch
+            再戦する
           </button>
+          <button
+            onClick={() =>
+              sendWSMessage({
+                type: 'REMATCH_VOTE',
+                request_id: randomID('vote-no'),
+                action_id: randomID('vote-no'),
+                expected_version: expectedVersion,
+                agree: false,
+              })
+            }
+            disabled={wsConnectionState !== 'connected' || !roomState?.my_actions.can_rematch_vote}
+            className="btn-rematch"
+          >
+            再戦しない
+          </button>
+        </div>
+          </section>
+
+          <section className="panel tech-panel">
+            <h2>WebSocket</h2>
+            <p className="subtle">状態: {wsConnectionState}</p>
+            <div className="row">
+              <button onClick={() => connectWebSocket()} disabled={!roomID || !token}>
+                接続
+              </button>
+              <button
+                onClick={() =>
+                  sendWSMessage({
+                    type: 'ROOM_SYNC_REQUEST',
+                    request_id: randomID('sync'),
+                  })
+                }
+                disabled={wsConnectionState !== 'connected'}
+              >
+                同期取得
+              </button>
+              <button
+                onClick={() =>
+                  sendWSMessage({
+                    type: 'PING',
+                    request_id: randomID('ping'),
+                  })
+                }
+                disabled={wsConnectionState !== 'connected'}
+              >
+                Ping
+              </button>
+              <button
+                onClick={() =>
+                  sendWSMessage({
+                    type: 'HIT',
+                    request_id: randomID('hit'),
+                    action_id: randomID('ws-hit'),
+                    expected_version: expectedVersion,
+                  })
+                }
+                disabled={wsConnectionState !== 'connected' || !canPlay}
+              >
+                WSヒット
+              </button>
+              <button
+                onClick={() =>
+                  sendWSMessage({
+                    type: 'STAND',
+                    request_id: randomID('stand'),
+                    action_id: randomID('ws-stand'),
+                    expected_version: expectedVersion,
+                  })
+                }
+                disabled={wsConnectionState !== 'connected' || !canPlay}
+              >
+                WSスタンド
+              </button>
+            </div>
+          </section>
+
+          <section className="panel tech-panel">
+            <h2>HTTP操作（予備）</h2>
+            <div className="row">
+              <button onClick={hitByHTTP} disabled={!roomID || expectedVersion <= 0}>
+                ヒット
+              </button>
+              <button onClick={standByHTTP} disabled={!roomID || expectedVersion <= 0}>
+                スタンド
+              </button>
+            </div>
+          </section>
+        </div>
+
+        <div className="right-pane">
+          <section className="panel tech-panel">
+            <h2>ルーム操作</h2>
+            <div className="row">
+              <button onClick={joinRoomFlow}>ルームに入る</button>
+              <input value={roomID} onChange={(event) => setRoomID(event.target.value)} placeholder="ルームID" />
+              <button onClick={createRoom}>作成</button>
+              <button onClick={listRooms}>一覧</button>
+              <button onClick={joinRoom} disabled={!roomID}>
+                参加
+              </button>
+              <button onClick={startRoom} disabled={!roomID}>
+                開始
+              </button>
+              <button onClick={fetchRoom} disabled={!roomID}>
+                取得
+              </button>
+              <button onClick={fetchHistory} disabled={!roomID}>
+                履歴
+              </button>
+              <button onClick={fetchHint} disabled={!roomID}>
+                ヒント
+              </button>
+            </div>
+            <ul className="list">
+              {rooms.map((room) => (
+                <li key={room.id}>
+                  <button
+                    onClick={() => {
+                      setRoomID(room.id)
+                    }}
+                  >
+                    使用
+                  </button>{' '}
+                  {room.id} ({room.status})
+                </li>
+              ))}
+            </ul>
+          </section>
+
         </div>
       </section>
 
-      <section className="panel">
-        <h2>HTTP Turn Actions</h2>
-        <div className="row">
-          <button onClick={hitByHTTP} disabled={!roomID || expectedVersion <= 0}>
-            HIT
-          </button>
-          <button onClick={standByHTTP} disabled={!roomID || expectedVersion <= 0}>
-            STAND
-          </button>
-        </div>
+      <section className="panel debug-panel tech-panel">
+        <h2>状態スナップショット</h2>
+        <pre>{roomState ? JSON.stringify(roomState, null, 2) : 'ROOM_STATE_SYNC をまだ受信していません'}</pre>
       </section>
 
-      <section className="panel">
-        <h2>State Snapshot</h2>
-        <pre>{roomState ? JSON.stringify(roomState, null, 2) : 'no ROOM_STATE_SYNC received yet'}</pre>
+      <section className="panel debug-panel tech-panel">
+        <h2>HTTP出力</h2>
+        <pre>{historyJSON || '空です'}</pre>
       </section>
 
-      <section className="panel">
-        <h2>HTTP Output</h2>
-        <pre>{historyJSON || 'empty'}</pre>
-      </section>
-
-      <section className="panel">
-        <h2>WebSocket Log</h2>
-        <pre>{wsLog.length > 0 ? wsLog.join('\n') : 'empty'}</pre>
+      <section className="panel debug-panel tech-panel">
+        <h2>WebSocketログ</h2>
+        <pre>{wsLog.length > 0 ? wsLog.join('\n') : '空です'}</pre>
       </section>
     </main>
   )

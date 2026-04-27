@@ -152,11 +152,30 @@ func (u *roomService) JoinRoom(ctx context.Context, roomID, userID string) (*mod
 	room.Touch(now)
 
 	if err := u.store.Transaction(ctx, func(tx repository.Store) error {
-		if err := tx.CreateRoomPlayer(ctx, joiner); err != nil {
-			if err == repository.ErrAlreadyExists {
+		existing, err := tx.GetRoomPlayer(ctx, roomID, userID)
+		if err != nil && err != repository.ErrNotFound {
+			return err
+		}
+		if err == repository.ErrNotFound {
+			if err := tx.CreateRoomPlayer(ctx, joiner); err != nil {
+				if err == repository.ErrAlreadyExists {
+					return model.ErrRoomFull
+				}
+				return err
+			}
+		} else {
+			// 一度 LEFT になった同一ユーザーは既存行を再利用して再参加させる。
+			if existing.Status != model.RoomPlayerLeft {
 				return model.ErrRoomFull
 			}
-			return err
+			if err := existing.SetStatus(model.RoomPlayerActive); err != nil {
+				return err
+			}
+			existing.LeftAt = nil
+			existing.JoinedAt = now
+			if err := tx.UpdateRoomPlayer(ctx, existing); err != nil {
+				return err
+			}
 		}
 		return tx.UpdateRoom(ctx, room)
 	}); err != nil {
@@ -1200,8 +1219,9 @@ func (u *roomService) playerStand(ctx context.Context, sessionID string) error {
 	actionLog := &model.ActionLog{
 		SessionID:          sess.ID,
 		ActorType:          model.ActorTypeSystem,
-		ActorUserID:        "",
-		TargetUserID:       player.UserID,
+		// Postgres の actor_user_id は uuid 型のため空文字不可。冪等キー用に対象プレイヤーを入れる。
+		ActorUserID:  player.UserID,
+		TargetUserID: player.UserID,
 		ActionID:           sysActionID,
 		RequestType:        "AUTO_STAND",
 		RequestPayloadHash: hex.EncodeToString(hash[:]),

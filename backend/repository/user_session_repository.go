@@ -8,10 +8,7 @@ import (
 )
 
 func (s *pgStore) UpsertSession(ctx context.Context, session *model.Session) error {
-	row, err := authSessionRecordFromDomain(session)
-	if err != nil {
-		return err
-	}
+	row := authSessionRecordFromDomain(session)
 	return s.db.WithContext(ctx).Save(row).Error
 }
 

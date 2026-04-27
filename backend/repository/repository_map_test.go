@@ -58,6 +58,26 @@ func TestGameSessionRecordToDomain_ValidatesStatus(t *testing.T) {
 	}
 }
 
+func TestGameSessionRecordToDomain_InvalidDeckJSON(t *testing.T) {
+	_, err := gameSessionRecordToDomain(&GameSessionRecord{
+		Status: string(model.SessionStatusPlayerTurn),
+		Deck:   []byte(`not-json`),
+	})
+	if err == nil {
+		t.Fatal("expected deck json error")
+	}
+}
+
+func TestDealerStateRecordToDomain_InvalidHandJSON(t *testing.T) {
+	_, err := dealerStateRecordToDomain(&DealerStateRecord{
+		SessionID: "s1",
+		Hand:      []byte(`{`),
+	})
+	if err == nil {
+		t.Fatal("expected hand json error")
+	}
+}
+
 func TestPlayerStateRecordToDomain_ValidatesStatusAndOutcome(t *testing.T) {
 	_, err := playerStateRecordToDomain(&PlayerStateRecord{Status: "INVALID", Hand: []byte("[]")})
 	if err == nil {
@@ -84,6 +104,34 @@ func TestRoomPlayerAndActionLogRecordToDomain_Validations(t *testing.T) {
 	}
 }
 
+func TestActionLogRecordFromDomain_SystemEmptyActorCoercesForPostgresUUID(t *testing.T) {
+	target := "22222222-2222-2222-2222-222222222222"
+	rec := actionLogRecordFromDomain(&model.ActionLog{
+		SessionID:          "11111111-1111-1111-1111-111111111111",
+		ActorType:          model.ActorTypeSystem,
+		ActorUserID:        "",
+		TargetUserID:       target,
+		ActionID:           "auto-stand:s1:1",
+		RequestType:        "AUTO_STAND",
+		RequestPayloadHash: "h",
+	})
+	if rec.ActorUserID != target {
+		t.Fatalf("SYSTEM empty actor: want actor=%q got %q", target, rec.ActorUserID)
+	}
+	rec2 := actionLogRecordFromDomain(&model.ActionLog{
+		SessionID:          "11111111-1111-1111-1111-111111111111",
+		ActorType:          model.ActorTypeSystem,
+		ActorUserID:        "",
+		TargetUserID:       "",
+		ActionID:           "x",
+		RequestType:        "AUTO_STAND",
+		RequestPayloadHash: "h",
+	})
+	if rec2.ActorUserID != "00000000-0000-0000-0000-000000000000" {
+		t.Fatalf("SYSTEM no target: want nil UUID got %q", rec2.ActorUserID)
+	}
+}
+
 func TestRoundLogRecordFromDomain_InvalidID(t *testing.T) {
 	_, err := roundLogRecordFromDomain(&model.RoundLog{ID: "not-number"})
 	if err == nil {
@@ -94,10 +142,7 @@ func TestRoundLogRecordFromDomain_InvalidID(t *testing.T) {
 func TestBasicRecordRoundTrips(t *testing.T) {
 	now := time.Now().UTC()
 	room := &model.Room{ID: "r1", HostUserID: "u1", Status: model.RoomStatusReady, CreatedAt: now, UpdatedAt: now}
-	roomRec, err := roomRecordFromDomain(room)
-	if err != nil {
-		t.Fatalf("roomRecordFromDomain failed: %v", err)
-	}
+	roomRec := roomRecordFromDomain(room)
 	if _, err := roomRecordToDomain(roomRec); err != nil {
 		t.Fatalf("roomRecordToDomain failed: %v", err)
 	}
@@ -121,8 +166,8 @@ func TestBasicRecordRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("roundLogRecordFromDomain failed: %v", err)
 	}
-	if _, err := roundLogRecordToDomain(roundRec); err != nil {
-		t.Fatalf("roundLogRecordToDomain failed: %v", err)
+	if roundLogRecordToDomain(roundRec) == nil {
+		t.Fatal("roundLogRecordToDomain returned nil")
 	}
 }
 

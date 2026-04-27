@@ -83,3 +83,55 @@ func TestRun_Success(t *testing.T) {
 	}
 }
 
+func TestMain_SuccessAndFailure(t *testing.T) {
+	prevGetenv := getenv
+	prevFatalf := logFatalf
+	prevPrintln := logPrintln
+	prevOpen := openDB
+	prevMigrate := migrateDB
+	t.Cleanup(func() {
+		getenv = prevGetenv
+		logFatalf = prevFatalf
+		logPrintln = prevPrintln
+		openDB = prevOpen
+		migrateDB = prevMigrate
+	})
+
+	openDB = func(string) (*gorm.DB, error) { return &gorm.DB{}, nil }
+
+	t.Run("success", func(t *testing.T) {
+		getenv = func(string) string { return "postgres://ok" }
+		fatalCalled := false
+		printCalled := false
+		logFatalf = func(string, ...any) { fatalCalled = true }
+		logPrintln = func(...any) { printCalled = true }
+		migrateDB = func(*gorm.DB) error { return nil }
+
+		main()
+		if fatalCalled {
+			t.Fatal("fatal should not be called")
+		}
+		if !printCalled {
+			t.Fatal("print should be called on success")
+		}
+	})
+
+	t.Run("failure", func(t *testing.T) {
+		getenv = func(string) string { return "" }
+		fatalCalled := false
+		logFatalf = func(string, ...any) { fatalCalled = true; panic("fatal-exit") }
+		logPrintln = func(...any) {}
+		migrateDB = func(*gorm.DB) error { return nil }
+
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("expected panic to stop execution")
+			}
+		}()
+		main()
+		if !fatalCalled {
+			t.Fatal("fatal should be called on run error")
+		}
+	})
+}
+

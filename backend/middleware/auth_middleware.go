@@ -24,20 +24,24 @@ func AuthMiddleware(secret []byte) echo.MiddlewareFunc {
 			return c.JSON(http.StatusUnauthorized, dto.Fail("unauthorized", "invalid or expired token"))
 		},
 		SuccessHandler: func(c echo.Context) {
-			token, ok := c.Get("user").(*jwt.Token)
-			if !ok || token == nil {
-				return
-			}
-			claims, ok := token.Claims.(*jwt.RegisteredClaims)
-			if !ok || claims.Subject == "" {
-				return
-			}
-			c.Set("user_id", claims.Subject)
-			if claims.ID != "" {
-				c.Set("session_id", claims.ID)
-			}
+			setAuthContextFromToken(c)
 		},
 	})
+}
+
+func setAuthContextFromToken(c echo.Context) {
+	token, ok := c.Get("user").(*jwt.Token)
+	if !ok || token == nil {
+		return
+	}
+	claims, ok := token.Claims.(*jwt.RegisteredClaims)
+	if !ok || claims.Subject == "" {
+		return
+	}
+	c.Set("user_id", claims.Subject)
+	if claims.ID != "" {
+		c.Set("session_id", claims.ID)
+	}
 }
 
 // skipJWTAuth はログイン／登録と、JWT を HTTP で要求しない経路（WS は Upgrade 後の AUTH メッセージで検証）。

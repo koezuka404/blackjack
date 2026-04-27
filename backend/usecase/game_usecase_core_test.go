@@ -152,6 +152,31 @@ func TestRoomUsecase_JoinRoom(t *testing.T) {
 	if _, err := uc6.JoinRoom(context.Background(), "r1", "u1"); err == nil || err.Error() != "create room player persist failed" {
 		t.Fatalf("expected create room player persist failed, got %v", err)
 	}
+
+	st7 := &authStoreStub{
+		getRoomFn: func(context.Context, string) (*model.Room, error) {
+			return &model.Room{ID: "r1", HostUserID: "u1", Status: model.RoomStatusWaiting, CreatedAt: now, UpdatedAt: now}, nil
+		},
+		listRoomPlayersFn: func(context.Context, string) ([]*model.RoomPlayer, error) {
+			return []*model.RoomPlayer{{RoomID: "r1", UserID: "u1", SeatNo: 1, Status: model.RoomPlayerLeft, JoinedAt: now}}, nil
+		},
+		getRoomPlayerFn: func(context.Context, string, string) (*model.RoomPlayer, error) {
+			leftAt := now.Add(-time.Minute)
+			return &model.RoomPlayer{RoomID: "r1", UserID: "u1", SeatNo: 1, Status: model.RoomPlayerLeft, JoinedAt: now.Add(-time.Hour), LeftAt: &leftAt}, nil
+		},
+		updateRoomPlayerFn: func(_ context.Context, rp *model.RoomPlayer) error {
+			if rp.Status != model.RoomPlayerActive || rp.LeftAt != nil {
+				return errors.New("expected rejoin to reactivate left player")
+			}
+			return nil
+		},
+		updateRoomFn: func(context.Context, *model.Room) error { return nil },
+	}
+	st7.transactionFn = func(ctx context.Context, fn func(txStore repository.Store) error) error { return fn(st7) }
+	uc7 := NewRoomUsecase(st7, nil, nil)
+	if _, err := uc7.JoinRoom(context.Background(), "r1", "u1"); err != nil {
+		t.Fatalf("expected rejoin from LEFT to succeed, got %v", err)
+	}
 }
 
 func TestRoomUsecase_JoinRoom_RepositoryErrors(t *testing.T) {

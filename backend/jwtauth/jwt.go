@@ -10,6 +10,9 @@ import (
 )
 
 var ErrInvalidToken = errors.New("invalid jwt")
+var signTokenFn = func(t *jwt.Token, secret []byte) (string, error) {
+	return t.SignedString(secret)
+}
 
 // SignAccessToken は HS256 のアクセストークンを発行する。返す jti は監査ログの session_id 相当に使う。
 func SignAccessToken(secret []byte, userID string, ttl time.Duration) (token string, expiresAt time.Time, jti string, err error) {
@@ -26,7 +29,7 @@ func SignAccessToken(secret []byte, userID string, ttl time.Duration) (token str
 		ExpiresAt: jwt.NewNumericDate(expiresAt),
 	}
 	t := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := t.SignedString(secret)
+	signed, err := signTokenFn(t, secret)
 	if err != nil {
 		return "", time.Time{}, "", err
 	}

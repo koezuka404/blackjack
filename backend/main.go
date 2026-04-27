@@ -20,122 +20,38 @@ import (
 	"syscall"
 	"time"
 
-	"blackjack/backend/adapter/blackjackadapter"
 	"blackjack/backend/controller"
 	"blackjack/backend/db"
 	"blackjack/backend/observability"
-	"blackjack/backend/realtime"
 	"blackjack/backend/repository"
-	"blackjack/backend/router"
 	"blackjack/backend/usecase"
 
-	_ "github.com/ethanefung/blackjack"
-	_ "github.com/ethanefung/cards"
-	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
 
 var (
 	_ = websocket.ErrBadHandshake
+
+	// mainEntryFn は既定でシグナル待ち＋runApp。テストでは差し替え可能。
+	mainEntryFn = defaultMainEntry
+
+	// fatalLogFn は runApp 失敗時の終了処理（テストで差し替え可能）。
+	fatalLogFn = log.Fatal
 )
 
+func defaultMainEntry() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := runApp(ctx, os.Getenv); err != nil {
+		fatalLogFn(err)
+	}
+}
+
 func main() {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		log.Fatal("DATABASE_URL is required (set in .env or export in shell)")
-	}
-
-	gdb, err := db.Open(dsn)
-	if err != nil {
-		log.Fatalf("database: %v", err)
-	}
-	store := repository.NewPostgreSQLStore(gdb)
-	roomRedisAddr := parseRedisAddr("REDIS_ROOM_ADDR")
-	rateLimitRedisAddr := parseRedisAddr("REDIS_RATE_LIMIT_ADDR")
-
-	roomRedis := redis.NewClient(&redis.Options{Addr: roomRedisAddr})
-	rateLimitRedis := redis.NewClient(&redis.Options{Addr: rateLimitRedisAddr})
-
-	rateLimitRepo := repository.NewRedisTokenBucketRepository(rateLimitRedis, 20, 5.0)
-	limiter := usecase.NewRateLimitUsecase(rateLimitRepo)
-
-	jwtSecret := []byte(strings.TrimSpace(os.Getenv("JWT_SECRET")))
-	if len(jwtSecret) < 16 {
-		log.Fatal("JWT_SECRET is required and must be at least 16 bytes")
-	}
-	authUC := usecase.NewAuthUsecase(store, jwtSecret)
-	roomUC := usecase.NewRoomUsecase(store, blackjackadapter.NewHandEvaluator(), blackjackadapter.NewRoundEngine())
-
-	serverID := strings.TrimSpace(os.Getenv("SERVER_ID"))
-	if serverID == "" {
-		serverID = uuid.NewString()
-	}
-	roomSyncBroker := realtime.NewRoomSyncBroker(roomRedis, serverID)
-	roomSyncCtx, roomSyncCancel := context.WithCancel(context.Background())
-
-	controller.ConfigureWebSocketAllowedOrigins(parseWSAllowedOrigins())
-	controller.ConfigureWebSocketConnectionEpochStore(roomRedis, parseWSConnectionEpochTTL())
-
-	e := echo.New()
-	roomController := router.Register(e, store, limiter, authUC, roomUC, roomSyncBroker, jwtSecret)
-
-	go func() {
-		err := roomSyncBroker.RunSubscriber(roomSyncCtx, func(ctx context.Context, roomID, eventType string) {
-			roomController.BroadcastRoomStateFromPeer(ctx, roomID, eventType)
-		})
-		if err != nil && !errors.Is(err, context.Canceled) {
-			e.Logger.Errorf("room sync subscriber: %v", err)
-		}
-	}()
-
-	workerCtx, workerCancel := context.WithCancel(context.Background())
-	go runAutoStandWorker(workerCtx, e, roomUC, roomController)
-	go runSnapshotMetricsWorker(workerCtx, e, store)
-
-	e.GET("/health", healthHandler(gdb, roomRedis, rateLimitRedis))
-	e.GET("/metrics", echo.WrapHandler(promhttp.Handler()))
-
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-	addr := ":" + port
-
-	go func() {
-		if err := e.Start(addr); err != nil && err != http.ErrServerClosed {
-			e.Logger.Fatal(err)
-		}
-	}()
-
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
-	<-quit
-
-	roomSyncCancel()
-	workerCancel()
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := e.Shutdown(shutdownCtx); err != nil {
-		e.Logger.Errorf("server shutdown: %v", err)
-	}
-
-	if err := roomRedis.Close(); err != nil {
-		log.Printf("room redis close: %v", err)
-	}
-	if err := rateLimitRedis.Close(); err != nil {
-		log.Printf("rate-limit redis close: %v", err)
-	}
-	sqlDB, err := gdb.DB()
-	if err != nil {
-		log.Printf("database sql handle: %v", err)
-	} else if err := sqlDB.Close(); err != nil {
-		log.Printf("database close: %v", err)
-	}
+	mainEntryFn()
 }
 
 func parseWSAllowedOrigins() []string {
@@ -179,15 +95,33 @@ func parseRedisAddr(targetEnv string) string {
 	return "localhost:6379"
 }
 
+var (
+	autoStandWorkerInterval = 1 * time.Second
+	snapshotWorkerInterval  = 10 * time.Second
+
+	// autoStandDueSessionsFn はテストで差し替え可能（既定は RoomUsecase 実装）。
+	autoStandDueSessionsFn = func(ctx context.Context, uc usecase.RoomUsecase) ([]string, error) {
+		return uc.AutoStandDueSessions(ctx)
+	}
+
+	// broadcastRoomSyncFn はテストで差し替え可能（既定は RoomController 実装）。
+	broadcastRoomSyncFn = func(ctx context.Context, rc *controller.RoomController, roomID string) {
+		rc.BroadcastRoomSync(ctx, roomID)
+	}
+
+	snapshotCountRoomsFn    = func(ctx context.Context, s repository.Store) (int64, error) { return s.CountRooms(ctx) }
+	snapshotCountSessionsFn = func(ctx context.Context, s repository.Store) (int64, error) { return s.CountSessions(ctx) }
+)
+
 func runAutoStandWorker(ctx context.Context, e *echo.Echo, roomUC usecase.RoomUsecase, roomController *controller.RoomController) {
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(autoStandWorkerInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			roomIDs, err := roomUC.AutoStandDueSessions(ctx)
+			roomIDs, err := autoStandDueSessionsFn(ctx, roomUC)
 			if err != nil {
 				if !errors.Is(err, context.Canceled) {
 					e.Logger.Errorf("auto-stand worker error: %v", err)
@@ -195,28 +129,28 @@ func runAutoStandWorker(ctx context.Context, e *echo.Echo, roomUC usecase.RoomUs
 				continue
 			}
 			for _, roomID := range roomIDs {
-				roomController.BroadcastRoomSync(ctx, roomID)
+				broadcastRoomSyncFn(ctx, roomController, roomID)
 			}
 		}
 	}
 }
 
 func runSnapshotMetricsWorker(ctx context.Context, e *echo.Echo, store repository.Store) {
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(snapshotWorkerInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			rooms, err := store.CountRooms(ctx)
+			rooms, err := snapshotCountRoomsFn(ctx, store)
 			if err != nil {
 				if !errors.Is(err, context.Canceled) {
 					e.Logger.Errorf("metrics room count error: %v", err)
 				}
 				continue
 			}
-			sessions, err := store.CountSessions(ctx)
+			sessions, err := snapshotCountSessionsFn(ctx, store)
 			if err != nil {
 				if !errors.Is(err, context.Canceled) {
 					e.Logger.Errorf("metrics session count error: %v", err)

@@ -10,6 +10,16 @@ import (
 // roomSyncChannel は全インスタンスで共有する Pub/Sub チャンネル名（Phase 3 / §13.3 補足）。
 const roomSyncChannel = "blackjack:room:state_sync"
 
+// roomSyncMarshalJSON はテストで差し替え可能（既定は encoding/json）。
+var roomSyncMarshalJSON = json.Marshal
+
+func defaultPubSubChannel(sub *redis.PubSub) <-chan *redis.Message {
+	return sub.Channel()
+}
+
+// roomSyncPubSubChannelFn はテストで購読チャネルを差し替えるときに使う（既定は sub.Channel()）。
+var roomSyncPubSubChannelFn = defaultPubSubChannel
+
 // RoomSyncMessage はルーム状態同期の Pub/Sub ペイロード。
 type RoomSyncMessage struct {
 	RoomID    string `json:"room_id"`
@@ -37,7 +47,7 @@ func (b *RoomSyncBroker) Publish(ctx context.Context, roomID, eventType string) 
 		return nil
 	}
 	m := RoomSyncMessage{RoomID: roomID, EventType: eventType, Origin: b.serverID}
-	data, err := json.Marshal(m)
+	data, err := roomSyncMarshalJSON(m)
 	if err != nil {
 		return err
 	}
@@ -52,7 +62,7 @@ func (b *RoomSyncBroker) RunSubscriber(ctx context.Context, onRemoteSync func(ct
 	}
 	sub := b.rdb.Subscribe(ctx, roomSyncChannel)
 	defer func() { _ = sub.Close() }()
-	ch := sub.Channel()
+	ch := roomSyncPubSubChannelFn(sub)
 	for {
 		select {
 		case <-ctx.Done():

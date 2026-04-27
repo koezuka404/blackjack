@@ -7,18 +7,12 @@ import (
 )
 
 func (s *pgStore) CreateRoom(ctx context.Context, room *model.Room) error {
-	row, err := roomRecordFromDomain(room)
-	if err != nil {
-		return err
-	}
+	row := roomRecordFromDomain(room)
 	return s.db.WithContext(ctx).Create(row).Error
 }
 
 func (s *pgStore) UpdateRoom(ctx context.Context, room *model.Room) error {
-	row, err := roomRecordFromDomain(room)
-	if err != nil {
-		return err
-	}
+	row := roomRecordFromDomain(room)
 	return s.db.WithContext(ctx).Save(row).Error
 }
 
@@ -60,18 +54,12 @@ func (s *pgStore) ListRoomsByUserID(ctx context.Context, userID string) ([]*mode
 }
 
 func (s *pgStore) CreateRoomPlayer(ctx context.Context, p *model.RoomPlayer) error {
-	row, err := roomPlayerRecordFromDomain(p)
-	if err != nil {
-		return err
-	}
+	row := roomPlayerRecordFromDomain(p)
 	return s.db.WithContext(ctx).Create(row).Error
 }
 
 func (s *pgStore) UpdateRoomPlayer(ctx context.Context, p *model.RoomPlayer) error {
-	row, err := roomPlayerRecordFromDomain(p)
-	if err != nil {
-		return err
-	}
+	row := roomPlayerRecordFromDomain(p)
 	return s.db.WithContext(ctx).Save(row).Error
 }
 

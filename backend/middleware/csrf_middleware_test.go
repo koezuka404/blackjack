@@ -52,6 +52,20 @@ func TestCSRFMiddleware(t *testing.T) {
 	e := echo.New()
 	mw := CSRFMiddleware()
 
+	t.Run("skips csrf check for non-mutation methods", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/rooms", nil)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.SetPath("/api/rooms")
+		handler := mw(func(c echo.Context) error { return c.NoContent(http.StatusNoContent) })
+		if err := handler(c); err != nil {
+			t.Fatalf("handler error: %v", err)
+		}
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("unexpected status: %d", rec.Code)
+		}
+	})
+
 	t.Run("allows bearer auth without csrf header", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/api/rooms", nil)
 		req.Header.Set("Authorization", "Bearer token")
@@ -85,6 +99,22 @@ func TestCSRFMiddleware(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/api/rooms", nil)
 		req.AddCookie(&http.Cookie{Name: "csrf_token", Value: "abc"})
 		req.Header.Set("X-CSRF-Token", "def")
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.SetPath("/api/rooms")
+		handler := mw(func(c echo.Context) error { return c.NoContent(http.StatusNoContent) })
+		if err := handler(c); err != nil {
+			t.Fatalf("handler error: %v", err)
+		}
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("unexpected status: %d", rec.Code)
+		}
+	})
+
+	t.Run("rejects empty csrf cookie value", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/rooms", nil)
+		req.AddCookie(&http.Cookie{Name: "csrf_token", Value: ""})
+		req.Header.Set("X-CSRF-Token", "")
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
 		c.SetPath("/api/rooms")

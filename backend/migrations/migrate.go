@@ -10,6 +10,9 @@ import (
 var (
 	openDB    = db.Open
 	migrateDB = db.Migrate
+	getenv    = os.Getenv
+	logFatalf = log.Fatalf
+	logPrintln = log.Println
 )
 
 func run(dsn string) error {
@@ -24,10 +27,10 @@ func run(dsn string) error {
 }
 
 func main() {
-	dsn := os.Getenv("DATABASE_URL")
+	dsn := getenv("DATABASE_URL")
 	if err := run(dsn); err != nil {
-		log.Fatalf("migrate: %v", err)
+		logFatalf("migrate: %v", err)
 	}
 
-	log.Println("migration completed")
+	logPrintln("migration completed")
 }

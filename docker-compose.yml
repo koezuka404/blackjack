@@ -54,6 +54,21 @@ services:
       retries: 5
     restart: unless-stopped
 
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: blackjack-migrate
+    entrypoint: ["/app/migrate"]
+    environment:
+      DATABASE_URL: postgres://blackjack:blackjack@postgres:5432/blackjack?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - blackjack
+    restart: "no"
+
   backend:
     build:
       context: ./backend
@@ -63,6 +78,8 @@ services:
       DATABASE_URL: postgres://blackjack:blackjack@postgres:5432/blackjack?sslmode=disable
       REDIS_ROOM_ADDR: redis-room:6379
       REDIS_RATE_LIMIT_ADDR: redis-rate-limit:6379
+      # 本番では必ず 16 文字以上の強い値に差し替えること
+      JWT_SECRET: dev-docker-compose-secret-min-16
     ports:
       - "8080:8080"
     depends_on:
@@ -72,6 +89,23 @@ services:
         condition: service_healthy
       redis-rate-limit:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - blackjack
+    restart: unless-stopped
+
+  # ブラウザ用: 静的フロント + /api /ws を backend へプロキシ（http://localhost:${WEB_PORT:-80}）
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: blackjack-web
+    ports:
+      - "${WEB_PORT:-80}:80"
+    depends_on:
+      backend:
+        condition: service_started
     networks:
       - blackjack
     restart: unless-stopped

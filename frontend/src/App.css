@@ -1,61 +1,133 @@
+:root {
+  font-family:
+    Inter,
+    "Noto Sans JP",
+    system-ui,
+    -apple-system,
+    sans-serif;
+}
+
+body {
+  margin: 0;
+  background: #f3f4f6;
+  color: #111827;
+}
+
 .container {
+  max-width: 1100px;
+  margin: 0 auto;
   display: grid;
   gap: 12px;
-  text-align: left;
-  padding: 16px;
+  text-align: center;
+  padding: 20px;
+  justify-items: center;
+}
+
+.header-row {
+  width: 100%;
+  max-width: 960px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.top-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .container h1 {
-  font-size: 1.7rem;
+  font-size: 1.9rem;
   margin: 0;
+  letter-spacing: 0.02em;
+  color: #111827;
+}
+
+.auth-only {
+  max-width: 640px;
+  min-height: 78vh;
+  align-content: center;
+}
+
+.auth-card {
+  padding: 28px;
+  width: min(100%, 460px);
+}
+
+.auth-card h2 {
+  font-size: 1.45rem;
+}
+
+.auth-card .row {
+  margin-top: 10px;
+}
+
+.auth-form {
+  flex-direction: column;
+  align-items: stretch;
+  width: min(100%, 420px);
+}
+
+.auth-switch {
+  margin-top: 10px;
+}
+
+.btn-auth-switch {
+  background: #ffffff;
+  color: #2563eb;
+  border-color: #93c5fd;
+}
+
+.auth-card input,
+.auth-card button {
+  font-size: 18px;
+  padding: 12px 16px;
 }
 
 .panel {
-  border: 1px solid #d0d7de;
-  border-radius: 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
   padding: 12px;
-  background: #fff;
-}
-
-.panel h2 {
-  margin: 0 0 8px;
-  font-size: 1rem;
+  background: #ffffff;
 }
 
 .row {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  justify-content: center;
 }
 
 input,
 button {
-  border: 1px solid #9ca3af;
-  border-radius: 6px;
-  padding: 8px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 8px 12px;
   font-size: 14px;
 }
 
+input {
+  background: #ffffff;
+  color: #111827;
+}
+
+input::placeholder {
+  color: #9ca3af;
+}
+
 button {
-  background: #111827;
-  color: #fff;
+  background: #2563eb;
+  color: #ffffff;
+  font-weight: 700;
+  border-color: #2563eb;
   cursor: pointer;
 }
 
 button:disabled {
-  background: #9ca3af;
+  background: #d1d5db;
+  border-color: #d1d5db;
+  color: #6b7280;
   cursor: not-allowed;
-}
-
-pre {
-  margin: 0;
-  max-height: 260px;
-  overflow: auto;
-  background: #0f172a;
-  color: #dbeafe;
-  border-radius: 6px;
-  padding: 10px;
-  font-size: 12px;
 }
 
 .subtle {
@@ -64,7 +136,216 @@ pre {
   font-size: 13px;
 }
 
-.list {
-  margin: 8px 0 0;
-  padding-left: 16px;
+.layout-main {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  width: 100%;
+  justify-items: center;
+}
+
+.left-pane {
+  width: 100%;
+  max-width: 960px;
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+}
+
+.right-pane,
+.tech-panel {
+  display: none;
+}
+
+.panel-table {
+  width: 100%;
+  max-width: 920px;
+  margin: 0 auto;
+}
+
+.start-row {
+  margin: 8px 0;
+}
+
+.table-felt {
+  margin-top: 8px;
+  border-radius: 14px;
+  padding: 18px 16px;
+  border: 1px solid #86efac;
+  background: #16a34a;
+}
+
+.table-top-row {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 14px;
+}
+
+.table-bottom-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  justify-items: center;
+}
+
+.seat {
+  background: #15803d;
+  border: 1px solid #86efac;
+  border-radius: 10px;
+  padding: 10px;
+  text-align: center;
+  width: min(100%, 520px);
+  color: #ecfdf5;
+}
+
+.seat .subtle {
+  color: #ffffff;
+}
+
+.dealer-seat {
+  min-width: 290px;
+}
+
+.playing-cards {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+
+.playing-card {
+  width: 58px;
+  height: 84px;
+  border-radius: 7px;
+  border: 1px solid #d1d5db;
+  background: #ffffff;
+  position: relative;
+}
+
+.card-corner {
+  position: absolute;
+  font-size: 0.82rem;
+  font-weight: 800;
+  line-height: 1.05;
+  white-space: pre;
+}
+
+.card-corner-top {
+  top: 5px;
+  left: 6px;
+}
+
+.card-corner-bottom {
+  bottom: 5px;
+  right: 6px;
+  transform: rotate(180deg);
+}
+
+.card-center {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 1.45rem;
+}
+
+.card-red {
+  color: #dc2626;
+}
+
+.card-black {
+  color: #111827;
+}
+
+.card-back {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.hand-cards-empty {
+  margin-top: 8px;
+  min-height: 84px;
+  width: 58px;
+  border-radius: 7px;
+  border: 1px dashed #d1d5db;
+  color: #e5e7eb;
+  display: grid;
+  place-items: center;
+}
+
+.action-row {
+  margin-top: 12px;
+}
+
+.btn-logout-standalone {
+  min-width: 120px;
+  background: #e5e7eb;
+  color: #111827;
+  border-color: #d1d5db;
+}
+
+.btn-join-room {
+  min-width: 150px;
+  background: #0ea5e9;
+  border-color: #0ea5e9;
+}
+
+.btn-leave-room {
+  min-width: 140px;
+  background: #6b7280;
+  border-color: #6b7280;
+}
+
+.btn-start-game {
+  min-width: 180px;
+  background: #22c55e;
+  border-color: #22c55e;
+  color: #052e16;
+}
+
+.btn-hit {
+  min-width: 120px;
+  background: #f59e0b;
+  border-color: #f59e0b;
+}
+
+.btn-stand {
+  min-width: 120px;
+  background: #eab308;
+  border-color: #eab308;
+  color: #2b1d08;
+}
+
+.btn-rematch {
+  min-width: 130px;
+  background: #14b8a6;
+  border-color: #14b8a6;
+}
+
+.result-banner {
+  margin-top: 8px;
+  margin-bottom: 6px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  text-align: center;
+  font-weight: 800;
+}
+
+.result-win {
+  background: #dcfce7;
+  border: 1px solid #86efac;
+  color: #166534;
+}
+
+.result-lose {
+  background: #fee2e2;
+  border: 1px solid #fca5a5;
+  color: #991b1b;
+}
+
+.result-draw {
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+  color: #92400e;
 }

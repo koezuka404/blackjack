@@ -30,6 +30,9 @@ type roomUsecaseControllerStub struct {
 	resetRoomFn         func(context.Context, string, string) (*model.Room, error)
 	leaveRoomFn         func(context.Context, string, string) (*model.Room, *usecase.HostTransfer, error)
 	voteRematchFn       func(context.Context, string, string, bool, int64, string) (*model.Room, *model.GameSession, error)
+	getRoomStateFn      func(context.Context, string, string) (*usecase.RoomState, error)
+	markConnectedFn     func(context.Context, string, string) error
+	markDisconnectedFn  func(context.Context, string, string) error
 }
 
 func (s roomUsecaseControllerStub) CreateRoom(ctx context.Context, hostUserID string) (*model.Room, error) {
@@ -50,8 +53,13 @@ func (s roomUsecaseControllerStub) GetRoom(ctx context.Context, roomID, userID s
 	}
 	return nil, nil, nil
 }
-func (s roomUsecaseControllerStub) GetRoomState(context.Context, string, string) (*usecase.RoomState, error) {
-	return nil, nil
+func (s roomUsecaseControllerStub) GetRoomState(ctx context.Context, roomID, userID string) (*usecase.RoomState, error) {
+	if s.getRoomStateFn != nil {
+		return s.getRoomStateFn(ctx, roomID, userID)
+	}
+	return &usecase.RoomState{
+		Room: &model.Room{ID: roomID, Status: model.RoomStatusWaiting},
+	}, nil
 }
 func (s roomUsecaseControllerStub) ListRooms(ctx context.Context, userID string) ([]*model.Room, error) {
 	if s.listRoomsFn != nil {
@@ -95,8 +103,16 @@ func (s roomUsecaseControllerStub) VoteRematch(ctx context.Context, roomID, user
 	}
 	return nil, nil, nil
 }
-func (s roomUsecaseControllerStub) MarkConnected(context.Context, string, string) error { return nil }
-func (s roomUsecaseControllerStub) MarkDisconnected(context.Context, string, string) error {
+func (s roomUsecaseControllerStub) MarkConnected(ctx context.Context, roomID, userID string) error {
+	if s.markConnectedFn != nil {
+		return s.markConnectedFn(ctx, roomID, userID)
+	}
+	return nil
+}
+func (s roomUsecaseControllerStub) MarkDisconnected(ctx context.Context, roomID, userID string) error {
+	if s.markDisconnectedFn != nil {
+		return s.markDisconnectedFn(ctx, roomID, userID)
+	}
 	return nil
 }
 func (s roomUsecaseControllerStub) AutoStandDueSessions(context.Context) ([]string, error) {

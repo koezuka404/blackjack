@@ -37,13 +37,26 @@ type roomHub struct {
 
 var globalRoomHub = &roomHub{rooms: map[string]map[*websocket.Conn]wsConnMeta{}, latest: map[string]*websocket.Conn{}}
 
+func allowAllWSOrigins(_ *http.Request) bool {
+	return true
+}
+
 var wsUpgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin: allowAllWSOrigins,
 }
 
 var (
-	wsEpochRedis *redis.Client
-	wsEpochTTL   = 2 * time.Minute
+	wsEpochRedis  *redis.Client
+	wsEpochTTL    = 2 * time.Minute
+	wsEpochIncrFn = func(ctx context.Context, rdb *redis.Client, key string) (int64, error) {
+		return rdb.Incr(ctx, key).Result()
+	}
+	wsEpochSetFn = func(ctx context.Context, rdb *redis.Client, key string, value any, ttl time.Duration) error {
+		return rdb.Set(ctx, key, value, ttl).Err()
+	}
+	wsEpochGetInt64Fn = func(ctx context.Context, rdb *redis.Client, key string) (int64, error) {
+		return rdb.Get(ctx, key).Int64()
+	}
 )
 
 // ConfigureWebSocketAllowedOrigins は本番用に WS の Origin を制限する。
@@ -105,11 +118,11 @@ func registerConnectionEpoch(ctx context.Context, roomID, userID string) (int64,
 	if wsEpochRedis == nil {
 		return 0, nil
 	}
-	epoch, err := wsEpochRedis.Incr(ctx, wsEpochCounterKey(roomID, userID)).Result()
+	epoch, err := wsEpochIncrFn(ctx, wsEpochRedis, wsEpochCounterKey(roomID, userID))
 	if err != nil {
 		return 0, err
 	}
-	if err := wsEpochRedis.Set(ctx, wsEpochLatestKey(roomID, userID), epoch, wsEpochTTL).Err(); err != nil {
+	if err := wsEpochSetFn(ctx, wsEpochRedis, wsEpochLatestKey(roomID, userID), epoch, wsEpochTTL); err != nil {
 		return 0, err
 	}
 	return epoch, nil
@@ -119,14 +132,14 @@ func refreshConnectionEpoch(ctx context.Context, roomID, userID string, epoch in
 	if wsEpochRedis == nil || epoch <= 0 {
 		return nil
 	}
-	return wsEpochRedis.Set(ctx, wsEpochLatestKey(roomID, userID), epoch, wsEpochTTL).Err()
+	return wsEpochSetFn(ctx, wsEpochRedis, wsEpochLatestKey(roomID, userID), epoch, wsEpochTTL)
 }
 
 func isCurrentConnectionEpoch(ctx context.Context, roomID, userID string, epoch int64) (bool, error) {
 	if wsEpochRedis == nil || epoch <= 0 {
 		return true, nil
 	}
-	current, err := wsEpochRedis.Get(ctx, wsEpochLatestKey(roomID, userID)).Int64()
+	current, err := wsEpochGetInt64Fn(ctx, wsEpochRedis, wsEpochLatestKey(roomID, userID))
 	if err == redis.Nil {
 		return false, nil
 	}
@@ -341,10 +354,7 @@ func (r *RoomController) broadcastRoomStateLocal(ctx context.Context, roomID, ac
 			Type: eventType,
 			Data: buildRoomDTO(state, meta.userID),
 		}
-		b, err := json.Marshal(payload)
-		if err != nil {
-			continue
-		}
+		b, _ := json.Marshal(payload)
 		if err := writeWS(conn, meta, b); err != nil {
 			globalRoomHub.remove(roomID, conn)
 			_ = conn.Close()
@@ -379,7 +389,7 @@ func sendWSErrorWithRetry(conn *websocket.Conn, meta wsConnMeta, code, message s
 
 func sendWSErrorWithRetryPtr(conn *websocket.Conn, meta wsConnMeta, code, message string, retryAfterMS *int64) {
 	// エラー契約は { type: "ERROR", error: { code, message } } で固定
-	b, err := json.Marshal(dto.WSErrorEvent{
+	b, _ := json.Marshal(dto.WSErrorEvent{
 		Type: dto.WSEventError,
 		Error: dto.WSErrorBody{
 			Code:         code,
@@ -387,18 +397,12 @@ func sendWSErrorWithRetryPtr(conn *websocket.Conn, meta wsConnMeta, code, messag
 			RetryAfterMS: retryAfterMS,
 		},
 	})
-	if err != nil {
-		return
-	}
 	_ = writeWS(conn, meta, b)
 }
 
 // sendWSPong は PING に対する PONG。
 func sendWSPong(conn *websocket.Conn, meta wsConnMeta) {
-	b, err := json.Marshal(map[string]string{"type": dto.WSEventPong})
-	if err != nil {
-		return
-	}
+	b, _ := json.Marshal(map[string]string{"type": dto.WSEventPong})
 	_ = writeWS(conn, meta, b)
 }
 

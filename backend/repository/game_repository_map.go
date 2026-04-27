@@ -4,11 +4,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"blackjack/backend/model"
 )
 
+// marshalStoredCardsHook はテスト専用。nil のとき通常の JSON マーシャルを使う。
+var marshalStoredCardsHook func([]model.StoredCard) ([]byte, error)
+
 func marshalStoredCards(c []model.StoredCard) ([]byte, error) {
+	if marshalStoredCardsHook != nil {
+		return marshalStoredCardsHook(c)
+	}
 	if c == nil {
 		return []byte("[]"), nil
 	}
@@ -26,9 +33,9 @@ func unmarshalStoredCards(b []byte) ([]model.StoredCard, error) {
 	return c, nil
 }
 
-func roomRecordFromDomain(r *model.Room) (*RoomRecord, error) {
+func roomRecordFromDomain(r *model.Room) *RoomRecord {
 	if r == nil {
-		return nil, nil
+		return nil
 	}
 	return &RoomRecord{
 		ID:               r.ID,
@@ -37,7 +44,7 @@ func roomRecordFromDomain(r *model.Room) (*RoomRecord, error) {
 		CurrentSessionID: r.CurrentSessionID,
 		CreatedAt:        r.CreatedAt,
 		UpdatedAt:        r.UpdatedAt,
-	}, nil
+	}
 }
 
 func roomRecordToDomain(m *RoomRecord) (*model.Room, error) {
@@ -208,9 +215,9 @@ func dealerStateRecordToDomain(m *DealerStateRecord) (*model.DealerState, error)
 	}, nil
 }
 
-func userRecordFromDomain(u *model.User) (*UserRecord, error) {
+func userRecordFromDomain(u *model.User) *UserRecord {
 	if u == nil {
-		return nil, nil
+		return nil
 	}
 	return &UserRecord{
 		ID:           u.ID,
@@ -218,7 +225,7 @@ func userRecordFromDomain(u *model.User) (*UserRecord, error) {
 		PasswordHash: u.PasswordHash,
 		CreatedAt:    u.CreatedAt,
 		UpdatedAt:    u.UpdatedAt,
-	}, nil
+	}
 }
 
 func userRecordToDomain(m *UserRecord) (*model.User, error) {
@@ -234,16 +241,16 @@ func userRecordToDomain(m *UserRecord) (*model.User, error) {
 	}, nil
 }
 
-func authSessionRecordFromDomain(s *model.Session) (*SessionRecord, error) {
+func authSessionRecordFromDomain(s *model.Session) *SessionRecord {
 	if s == nil {
-		return nil, nil
+		return nil
 	}
 	return &SessionRecord{
 		ID:        s.ID,
 		UserID:    s.UserID,
 		ExpiresAt: s.ExpiresAt,
 		CreatedAt: s.CreatedAt,
-	}, nil
+	}
 }
 
 func authSessionRecordToDomain(m *SessionRecord) (*model.Session, error) {
@@ -258,9 +265,9 @@ func authSessionRecordToDomain(m *SessionRecord) (*model.Session, error) {
 	}, nil
 }
 
-func roomPlayerRecordFromDomain(p *model.RoomPlayer) (*RoomPlayerRecord, error) {
+func roomPlayerRecordFromDomain(p *model.RoomPlayer) *RoomPlayerRecord {
 	if p == nil {
-		return nil, nil
+		return nil
 	}
 	return &RoomPlayerRecord{
 		RoomID:   p.RoomID,
@@ -269,7 +276,7 @@ func roomPlayerRecordFromDomain(p *model.RoomPlayer) (*RoomPlayerRecord, error) 
 		Status:   string(p.Status),
 		JoinedAt: p.JoinedAt,
 		LeftAt:   p.LeftAt,
-	}, nil
+	}
 }
 
 func roomPlayerRecordToDomain(m *RoomPlayerRecord) (*model.RoomPlayer, error) {
@@ -290,20 +297,29 @@ func roomPlayerRecordToDomain(m *RoomPlayerRecord) (*model.RoomPlayer, error) {
 	}, nil
 }
 
-func actionLogRecordFromDomain(a *model.ActionLog) (*ActionLogRecord, error) {
+func actionLogRecordFromDomain(a *model.ActionLog) *ActionLogRecord {
 	if a == nil {
-		return nil, nil
+		return nil
+	}
+	actorUserID := strings.TrimSpace(a.ActorUserID)
+	// Postgres の actor_user_id は uuid 型。SYSTEM 系で空が来た場合は対象ユーザーへ寄せる（旧バイナリ／欠損行の保険）。
+	if actorUserID == "" && a.ActorType == model.ActorTypeSystem {
+		if tid := strings.TrimSpace(a.TargetUserID); tid != "" {
+			actorUserID = tid
+		} else {
+			actorUserID = "00000000-0000-0000-0000-000000000000"
+		}
 	}
 	return &ActionLogRecord{
 		SessionID:          a.SessionID,
 		ActorType:          string(a.ActorType),
-		ActorUserID:        a.ActorUserID,
+		ActorUserID:        actorUserID,
 		TargetUserID:       a.TargetUserID,
 		ActionID:           a.ActionID,
 		RequestType:        a.RequestType,
 		RequestPayloadHash: a.RequestPayloadHash,
 		ResponseSnapshot:   []byte(a.ResponseSnapshot),
-	}, nil
+	}
 }
 
 func actionLogRecordToDomain(m *ActionLogRecord) (*model.ActionLog, error) {
@@ -326,26 +342,26 @@ func actionLogRecordToDomain(m *ActionLogRecord) (*model.ActionLog, error) {
 	}, nil
 }
 
-func rematchVoteRecordFromDomain(v *model.RematchVote) (*RematchVoteRecord, error) {
+func rematchVoteRecordFromDomain(v *model.RematchVote) *RematchVoteRecord {
 	if v == nil {
-		return nil, nil
+		return nil
 	}
 	return &RematchVoteRecord{
 		SessionID: v.SessionID,
 		UserID:    v.UserID,
 		Agree:     v.Agree,
-	}, nil
+	}
 }
 
-func rematchVoteRecordToDomain(m *RematchVoteRecord) (*model.RematchVote, error) {
+func rematchVoteRecordToDomain(m *RematchVoteRecord) *model.RematchVote {
 	if m == nil {
-		return nil, nil
+		return nil
 	}
 	return &model.RematchVote{
 		SessionID: m.SessionID,
 		UserID:    m.UserID,
 		Agree:     m.Agree,
-	}, nil
+	}
 }
 
 func roundLogRecordFromDomain(r *model.RoundLog) (*RoundLogRecord, error) {
@@ -369,9 +385,9 @@ func roundLogRecordFromDomain(r *model.RoundLog) (*RoundLogRecord, error) {
 	}, nil
 }
 
-func roundLogRecordToDomain(m *RoundLogRecord) (*model.RoundLog, error) {
+func roundLogRecordToDomain(m *RoundLogRecord) *model.RoundLog {
 	if m == nil {
-		return nil, nil
+		return nil
 	}
 	return &model.RoundLog{
 		ID:            strconv.FormatUint(uint64(m.ID), 10),
@@ -379,5 +395,5 @@ func roundLogRecordToDomain(m *RoundLogRecord) (*model.RoundLog, error) {
 		RoundNo:       m.RoundNo,
 		ResultPayload: string(m.ResultPayload),
 		CreatedAt:     m.CreatedAt,
-	}, nil
+	}
 }

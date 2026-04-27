@@ -7,10 +7,7 @@ import (
 )
 
 func (s *pgStore) CreateUser(ctx context.Context, user *model.User) error {
-	row, err := userRecordFromDomain(user)
-	if err != nil {
-		return err
-	}
+	row := userRecordFromDomain(user)
 	if err := s.db.WithContext(ctx).Create(row).Error; err != nil {
 		return mapErr(err)
 	}

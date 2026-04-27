@@ -255,10 +255,7 @@ func (s *pgStore) GetDealerState(ctx context.Context, sessionID string) (*model.
 }
 
 func (s *pgStore) CreateActionLog(ctx context.Context, actionLog *model.ActionLog) error {
-	row, err := actionLogRecordFromDomain(actionLog)
-	if err != nil {
-		return err
-	}
+	row := actionLogRecordFromDomain(actionLog)
 	return s.db.WithContext(ctx).Create(row).Error
 }
 
@@ -274,10 +271,7 @@ func (s *pgStore) GetActionLogByActionID(ctx context.Context, sessionID, actorUs
 }
 
 func (s *pgStore) UpsertRematchVote(ctx context.Context, vote *model.RematchVote) error {
-	row, err := rematchVoteRecordFromDomain(vote)
-	if err != nil {
-		return err
-	}
+	row := rematchVoteRecordFromDomain(vote)
 	return s.db.WithContext(ctx).
 		Where("session_id = ? AND user_id = ?", row.SessionID, row.UserID).
 		Assign(map[string]any{
@@ -294,11 +288,7 @@ func (s *pgStore) ListRematchVotes(ctx context.Context, sessionID string) ([]*mo
 	}
 	out := make([]*model.RematchVote, 0, len(rows))
 	for i := range rows {
-		v, err := rematchVoteRecordToDomain(&rows[i])
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, v)
+		out = append(out, rematchVoteRecordToDomain(&rows[i]))
 	}
 	return out, nil
 }
@@ -319,7 +309,7 @@ func (s *pgStore) GetRoundLog(ctx context.Context, sessionID string, roundNo int
 	if err != nil {
 		return nil, mapErr(err)
 	}
-	return roundLogRecordToDomain(&rec)
+	return roundLogRecordToDomain(&rec), nil
 }
 
 func (s *pgStore) ListRoundLogsByRoomID(ctx context.Context, roomID string) ([]*model.RoundLog, error) {
@@ -335,11 +325,7 @@ func (s *pgStore) ListRoundLogsByRoomID(ctx context.Context, roomID string) ([]*
 	}
 	out := make([]*model.RoundLog, 0, len(rows))
 	for i := range rows {
-		item, err := roundLogRecordToDomain(&rows[i])
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, item)
+		out = append(out, roundLogRecordToDomain(&rows[i]))
 	}
 	return out, nil
 }
