@@ -15,7 +15,7 @@ func CSRFMiddleware() echo.MiddlewareFunc {
 			if !needsCSRF(c) {
 				return next(c)
 			}
-			// Authorization: Bearer はブラウザがクロスサイトで自動付与しないため CSRF を省略する。
+
 			if hasBearerAuth(c) {
 				return next(c)
 			}

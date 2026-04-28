@@ -1,0 +1,288 @@
+name: Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Rollback target environment"
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      backend_image_tag:
+        description: "Backend image tag to rollback to (GHCR)"
+        required: true
+      frontend_deployment_url:
+        description: "Vercel deployment URL to promote (optional)"
+        required: false
+
+jobs:
+  verify-inputs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate rollback inputs
+        env:
+          TARGET: ${{ github.event.inputs.target }}
+          BACKEND_IMAGE_TAG: ${{ github.event.inputs.backend_image_tag }}
+        run: |
+          set -euo pipefail
+          test -n "$TARGET"
+          test -n "$BACKEND_IMAGE_TAG"
+
+  rollback-backend:
+    runs-on: ubuntu-latest
+    needs: [verify-inputs]
+    environment: ${{ github.event.inputs.target }}
+    steps:
+      - name: Trigger backend rollback hook
+        env:
+          TARGET: ${{ github.event.inputs.target }}
+          BACKEND_IMAGE_TAG: ${{ github.event.inputs.backend_image_tag }}
+          STAGING_BACKEND_ROLLBACK_WEBHOOK_URL: ${{ secrets.STAGING_BACKEND_ROLLBACK_WEBHOOK_URL }}
+          PRODUCTION_BACKEND_ROLLBACK_WEBHOOK_URL: ${{ secrets.PRODUCTION_BACKEND_ROLLBACK_WEBHOOK_URL }}
+        run: |
+          set -euo pipefail
+          if [ "$TARGET" = "staging" ]; then
+            WEBHOOK="$STAGING_BACKEND_ROLLBACK_WEBHOOK_URL"
+          else
+            WEBHOOK="$PRODUCTION_BACKEND_ROLLBACK_WEBHOOK_URL"
+          fi
+          test -n "$WEBHOOK"
+          payload=$(printf '{"image_tag":"%s"}' "$BACKEND_IMAGE_TAG")
+          curl -fsS -X POST -H "Content-Type: application/json" --data "$payload" "$WEBHOOK"
+
+  rollback-frontend:
+    runs-on: ubuntu-latest
+    needs: [rollback-backend]
+    environment: ${{ github.event.inputs.target }}
+    if: ${{ github.event.inputs.frontend_deployment_url != '' }}
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install Vercel CLI
+        run: npm i -g vercel@latest
+      - name: Promote previous frontend deployment to production
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          FRONTEND_DEPLOYMENT_URL: ${{ github.event.inputs.frontend_deployment_url }}
+        run: |
+          set -euo pipefail
+          test -n "$FRONTEND_DEPLOYMENT_URL"
+          vercel promote "$FRONTEND_DEPLOYMENT_URL" --scope="$VERCEL_ORG_ID" --token="$VERCEL_TOKEN"
+
+  smoke-after-rollback:
+    runs-on: ubuntu-latest
+    needs: [rollback-backend, rollback-frontend]
+    if: always() && needs.rollback-backend.result == 'success'
+    environment: ${{ github.event.inputs.target }}
+    steps:
+      - name: Resolve smoke endpoints by target
+        id: resolve
+        env:
+          TARGET: ${{ github.event.inputs.target }}
+          STAGING_BACKEND_HEALTHCHECK_URL: ${{ secrets.STAGING_BACKEND_HEALTHCHECK_URL }}
+          PRODUCTION_BACKEND_HEALTHCHECK_URL: ${{ secrets.PRODUCTION_BACKEND_HEALTHCHECK_URL }}
+          STAGING_API_BASE_URL: ${{ secrets.STAGING_API_BASE_URL }}
+          PRODUCTION_API_BASE_URL: ${{ secrets.PRODUCTION_API_BASE_URL }}
+          STAGING_WS_BASE_URL: ${{ secrets.STAGING_WS_BASE_URL }}
+          PRODUCTION_WS_BASE_URL: ${{ secrets.PRODUCTION_WS_BASE_URL }}
+        run: |
+          set -euo pipefail
+          if [ "$TARGET" = "staging" ]; then
+            HEALTH_URL="$STAGING_BACKEND_HEALTHCHECK_URL"
+            API_BASE_URL="$STAGING_API_BASE_URL"
+            WS_BASE_URL="$STAGING_WS_BASE_URL"
+          else
+            HEALTH_URL="$PRODUCTION_BACKEND_HEALTHCHECK_URL"
+            API_BASE_URL="$PRODUCTION_API_BASE_URL"
+            WS_BASE_URL="$PRODUCTION_WS_BASE_URL"
+          fi
+          test -n "$HEALTH_URL"
+          test -n "$API_BASE_URL"
+          test -n "$WS_BASE_URL"
+          echo "health_url=$HEALTH_URL" >> "$GITHUB_OUTPUT"
+          echo "api_base_url=$API_BASE_URL" >> "$GITHUB_OUTPUT"
+          echo "ws_base_url=$WS_BASE_URL" >> "$GITHUB_OUTPUT"
+      - name: Check backend health after rollback
+        run: |
+          set -euo pipefail
+          curl -fsS "${{ steps.resolve.outputs.health_url }}" >/dev/null
+      - name: Check API and WS after rollback
+        env:
+          API_BASE_URL: ${{ steps.resolve.outputs.api_base_url }}
+          WS_BASE_URL: ${{ steps.resolve.outputs.ws_base_url }}
+        run: |
+          set -euo pipefail
+          USERNAME="rollback_smoke_$(date +%s)"
+          PASSWORD="password12"
+          SIGNUP_RESP=$(curl -fsS -H "Content-Type: application/json" \
+            -d "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}" \
+            "$API_BASE_URL/auth/signup")
+          TOKEN=$(echo "$SIGNUP_RESP" | jq -r '.data.access_token')
+          test -n "$TOKEN" && test "$TOKEN" != "null"
+          ROOM_RESP=$(curl -fsS -H "Authorization: Bearer $TOKEN" -X POST "$API_BASE_URL/rooms")
+          ROOM_ID=$(echo "$ROOM_RESP" | jq -r '.data.room.id')
+          test -n "$ROOM_ID" && test "$ROOM_ID" != "null"
+          API_BASE_URL="$API_BASE_URL" WS_BASE_URL="$WS_BASE_URL" TOKEN="$TOKEN" ROOM_ID="$ROOM_ID" node <<'NODE'
+          const apiBase = process.env.API_BASE_URL.replace(/\/+$/, '');
+          const wsBase = process.env.WS_BASE_URL.replace(/\/+$/, '');
+          const token = process.env.TOKEN;
+          const roomID = process.env.ROOM_ID;
+
+          async function fetchVersion() {
+            const res = await fetch(`${apiBase}/rooms/${roomID}`, {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            if (!res.ok) throw new Error(`room fetch failed: ${res.status}`);
+            const body = await res.json();
+            return Number(body?.data?.session?.version);
+          }
+
+          function wsSync(expectedVersion) {
+            const url = `${wsBase}/rooms/${roomID}`;
+            return new Promise((resolve, reject) => {
+              const ws = new WebSocket(url);
+              const timer = setTimeout(() => {
+                try { ws.close(); } catch {}
+                reject(new Error('ws timeout'));
+              }, 8000);
+
+              ws.onopen = () => {
+                ws.send(JSON.stringify({
+                  type: 'AUTH',
+                  request_id: `rollback-smoke-${Date.now()}`,
+                  access_token: token,
+                }));
+              };
+
+              ws.onmessage = (evt) => {
+                try {
+                  const msg = JSON.parse(String(evt.data));
+                  if (msg.type === 'ROOM_STATE_SYNC') {
+                    if (!msg?.data?.room || msg.data.room.id !== roomID) {
+                      throw new Error('room id mismatch');
+                    }
+                    if (Number.isFinite(expectedVersion) && msg?.data?.session?.version !== expectedVersion) {
+                      throw new Error('version mismatch');
+                    }
+                    clearTimeout(timer);
+                    ws.close();
+                    resolve();
+                  }
+                  if (msg.type === 'ERROR') {
+                    throw new Error(`ws error: ${msg?.error?.code || 'unknown'}`);
+                  }
+                } catch (err) {
+                  clearTimeout(timer);
+                  ws.close();
+                  reject(err);
+                }
+              };
+
+              ws.onerror = () => {
+                clearTimeout(timer);
+                reject(new Error('ws transport error'));
+              };
+            });
+          }
+
+          (async () => {
+            const expectedVersion = await fetchVersion();
+            await wsSync(expectedVersion);
+          })().catch((err) => {
+            console.error(err.message);
+            process.exit(1);
+          });
+          NODE
+
+  summarize-rollback:
+    runs-on: ubuntu-latest
+    needs: [verify-inputs, rollback-backend, rollback-frontend, smoke-after-rollback]
+    if: always()
+    steps:
+      - name: Append rollback summary
+        env:
+          TARGET: ${{ github.event.inputs.target }}
+          IMAGE_TAG: ${{ github.event.inputs.backend_image_tag }}
+          FRONTEND_DEPLOYMENT_URL: ${{ github.event.inputs.frontend_deployment_url }}
+        run: |
+          {
+            echo "## Rollback Summary"
+            echo ""
+            echo "- target: \`${TARGET}\`"
+            echo "- backend image tag: \`${IMAGE_TAG}\`"
+            echo "- frontend deployment URL input: \`${FRONTEND_DEPLOYMENT_URL:-<none>}\`"
+            echo ""
+            echo "- verify-inputs: \`${{ needs.verify-inputs.result }}\`"
+            echo "- rollback-backend: \`${{ needs.rollback-backend.result }}\`"
+            echo "- rollback-frontend: \`${{ needs.rollback-frontend.result }}\`"
+            echo "- smoke-after-rollback: \`${{ needs.smoke-after-rollback.result }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  notify-rollback-success:
+    runs-on: ubuntu-latest
+    needs: [smoke-after-rollback]
+    if: success()
+    steps:
+      - name: Notify Slack on rollback success
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          REF_NAME: ${{ github.ref_name }}
+          TARGET: ${{ github.event.inputs.target }}
+          IMAGE_TAG: ${{ github.event.inputs.backend_image_tag }}
+          ACTOR: ${{ github.actor }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [ -z "${SLACK_WEBHOOK_URL:-}" ]; then
+            echo "SLACK_WEBHOOK_URL is not configured; skipping notification."
+            exit 0
+          fi
+          MSG="Rollback success: ${REPO} target=${TARGET} image=${IMAGE_TAG} @ ${REF_NAME} actor=${ACTOR} sha=${SHA}. https://github.com/${REPO}/actions/runs/${RUN_ID}"
+          payload=$(printf '{"text":"%s"}' "$MSG")
+          curl -fsS -X POST -H "Content-Type: application/json" --data "$payload" "$SLACK_WEBHOOK_URL"
+
+  notify-rollback-failure:
+    runs-on: ubuntu-latest
+    needs: [verify-inputs, rollback-backend, rollback-frontend, smoke-after-rollback, summarize-rollback]
+    if: failure()
+    steps:
+      - name: Notify Slack on rollback failure
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          REF_NAME: ${{ github.ref_name }}
+          TARGET: ${{ github.event.inputs.target }}
+          ACTOR: ${{ github.actor }}
+          SHA: ${{ github.sha }}
+          VERIFY_RESULT: ${{ needs.verify-inputs.result }}
+          ROLLBACK_BACKEND_RESULT: ${{ needs.rollback-backend.result }}
+          ROLLBACK_FRONTEND_RESULT: ${{ needs.rollback-frontend.result }}
+          SMOKE_RESULT: ${{ needs.smoke-after-rollback.result }}
+        run: |
+          if [ -z "${SLACK_WEBHOOK_URL:-}" ]; then
+            echo "SLACK_WEBHOOK_URL is not configured; skipping notification."
+            exit 0
+          fi
+          FAILED=""
+          [ "$VERIFY_RESULT" = "failure" ] && FAILED="${FAILED} verify-inputs"
+          [ "$ROLLBACK_BACKEND_RESULT" = "failure" ] && FAILED="${FAILED} rollback-backend"
+          [ "$ROLLBACK_FRONTEND_RESULT" = "failure" ] && FAILED="${FAILED} rollback-frontend"
+          [ "$SMOKE_RESULT" = "failure" ] && FAILED="${FAILED} smoke-after-rollback"
+          FAILED=$(echo "$FAILED" | xargs)
+          [ -z "$FAILED" ] && FAILED="unknown"
+          MSG="Rollback failed: ${REPO} target=${TARGET} @ ${REF_NAME} actor=${ACTOR} sha=${SHA}. failed_jobs=[${FAILED}] https://github.com/${REPO}/actions/runs/${RUN_ID}"
+          payload=$(printf '{"text":"%s"}' "$MSG")
+          curl -fsS -X POST -H "Content-Type: application/json" --data "$payload" "$SLACK_WEBHOOK_URL"

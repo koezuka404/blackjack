@@ -44,7 +44,7 @@ type RoomHistoryData struct {
 	Items  []RoomHistoryItemJSON `json:"items"`
 }
 
-// PlayHintData は中級者向けヒューリスティックの HIT/STAND 推奨。
+
 type PlayHintData struct {
 	Recommendation string `json:"recommendation"`
 	SessionVersion int64  `json:"session_version"`

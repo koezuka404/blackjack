@@ -21,12 +21,12 @@ type RoomController struct {
 	jwtSecret  []byte
 }
 
-// NewRoomController はルーム API / WS 用コントローラを生成する。
+
 func NewRoomController(room usecase.RoomUsecase, limiter usecase.RateLimitUsecase, syncBroker *realtime.RoomSyncBroker, jwtSecret []byte) *RoomController {
 	return &RoomController{room: room, limiter: limiter, syncBroker: syncBroker, jwtSecret: jwtSecret}
 }
 
-// Register は HTTP のルーム系ルートを登録する（HIT/STAND 等）。
+
 func (r *RoomController) Register(g *echo.Group) {
 	g.POST("/rooms", r.CreateRoom)
 	g.GET("/rooms", r.ListRooms)
@@ -41,7 +41,7 @@ func (r *RoomController) Register(g *echo.Group) {
 	g.POST("/rooms/:id/reset", r.ResetRoomDebug)
 }
 
-// CreateRoom は卓の作成。
+
 func (r *RoomController) CreateRoom(c echo.Context) error {
 	userID, _ := c.Get("user_id").(string)
 	room, err := r.room.CreateRoom(c.Request().Context(), userID)
@@ -56,7 +56,7 @@ func (r *RoomController) CreateRoom(c echo.Context) error {
 	}))
 }
 
-// JoinRoom はホストの卓参加。
+
 func (r *RoomController) JoinRoom(c echo.Context) error {
 	userID, _ := c.Get("user_id").(string)
 	roomID := c.Param("id")
@@ -87,7 +87,7 @@ func (r *RoomController) JoinRoom(c echo.Context) error {
 	}))
 }
 
-// LeaveRoom は卓からの離脱。
+
 func (r *RoomController) LeaveRoom(c echo.Context) error {
 	userID, _ := c.Get("user_id").(string)
 	roomID := c.Param("id")
@@ -119,7 +119,7 @@ func (r *RoomController) LeaveRoom(c echo.Context) error {
 	}))
 }
 
-// GetRoom は単体ルーム＋セッション概要の取得。
+
 func (r *RoomController) GetRoom(c echo.Context) error {
 	userID, _ := c.Get("user_id").(string)
 	roomID := c.Param("id")
@@ -151,7 +151,7 @@ func (r *RoomController) GetRoom(c echo.Context) error {
 	return c.JSON(http.StatusOK, dto.OK(data))
 }
 
-// ListRooms は自分がホストのルーム一覧。
+
 func (r *RoomController) ListRooms(c echo.Context) error {
 	userID, _ := c.Get("user_id").(string)
 	rooms, err := r.room.ListRooms(c.Request().Context(), userID)

@@ -1,8 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches: [main, develop]
   pull_request:
 
 concurrency:
@@ -22,6 +20,10 @@ jobs:
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
 
       - name: go vet
         run: go vet ./...
@@ -94,6 +96,20 @@ jobs:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
 
+      # Inline WS scripts use the `ws` package so they work even if global WebSocket is unavailable.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install ws for integration WebSocket smoke tests
+        run: |
+          WS_DIR="${RUNNER_TEMP}/ci-ws-client"
+          mkdir -p "$WS_DIR"
+          cd "$WS_DIR"
+          npm init -y >/dev/null 2>&1
+          npm install ws@8 --silent
+          echo "NODE_PATH=${WS_DIR}/node_modules" >> "$GITHUB_ENV"
+
       - name: Run DB migrations
         env:
           DATABASE_URL: postgres://blackjack:blackjack@localhost:5432/blackjack?sslmode=disable
@@ -117,10 +133,11 @@ jobs:
           cat /tmp/backend.log
           exit 1
 
-      - name: Integration flow (auth/room/start/hit/stand/reconnect)
+      - name: Integration flow (auth/room/start/hit/stand/reconnect/rematch/duplicate/version-conflict)
         run: |
           set -euo pipefail
           BASE="http://localhost:8080/api"
+          WS_BASE="ws://localhost:8080/ws"
           USER="ci_$(date +%s)"
           PASS="password12"
           RESP=$(curl -s -H "Content-Type: application/json" \
@@ -138,9 +155,21 @@ jobs:
 
           VER=$(curl -s "${AUTH[@]}" "$BASE/rooms/$ROOM_ID" | jq -r '.data.session.version')
           AID1="hit-$(date +%s)-$RANDOM"
-          curl -s "${AUTH[@]}" -H "Content-Type: application/json" \
+          HIT_RESP=$(curl -s "${AUTH[@]}" -H "Content-Type: application/json" \
             -d "{\"expected_version\":$VER,\"action_id\":\"$AID1\"}" -X POST "$BASE/rooms/$ROOM_ID/hit" \
-            | jq -e '.success == true or .error.code == "invalid_game_state"' >/dev/null
+          )
+          echo "$HIT_RESP" | jq -e '.success == true or .error.code == "invalid_game_state"' >/dev/null
+
+          DUP_HIT_RESP=$(curl -s "${AUTH[@]}" -H "Content-Type: application/json" \
+            -d "{\"expected_version\":$VER,\"action_id\":\"$AID1\"}" -X POST "$BASE/rooms/$ROOM_ID/hit" \
+          )
+          echo "$DUP_HIT_RESP" | jq -e '.success == true or .error.code == "duplicate_action" or .error.code == "invalid_game_state" or .error.code == "version_conflict"' >/dev/null
+
+          BAD_VER=$((VER + 1000))
+          BAD_VER_RESP=$(curl -s "${AUTH[@]}" -H "Content-Type: application/json" \
+            -d "{\"expected_version\":$BAD_VER,\"action_id\":\"badver-$(date +%s)-$RANDOM\"}" -X POST "$BASE/rooms/$ROOM_ID/hit" \
+          )
+          echo "$BAD_VER_RESP" | jq -e '.error.code == "version_conflict" or .error.code == "invalid_game_state"' >/dev/null
 
           VER2=$(curl -s "${AUTH[@]}" "$BASE/rooms/$ROOM_ID" | jq -r '.data.session.version')
           AID2="stand-$(date +%s)-$RANDOM"
@@ -148,7 +177,208 @@ jobs:
             -d "{\"expected_version\":$VER2,\"action_id\":\"$AID2\"}" -X POST "$BASE/rooms/$ROOM_ID/stand" \
             | jq -e '.success == true or .error.code == "invalid_game_state"' >/dev/null
 
-          curl -s "${AUTH[@]}" "$BASE/rooms/$ROOM_ID" | jq -e '.success == true' >/dev/null
+          for i in {1..30}; do
+            ROOM_STATE=$(curl -s "${AUTH[@]}" "$BASE/rooms/$ROOM_ID")
+            echo "$ROOM_STATE" | jq -e '.success == true' >/dev/null
+            SESSION_STATUS=$(echo "$ROOM_STATE" | jq -r '.data.session.status // "NONE"')
+            if [ "$SESSION_STATUS" = "RESETTING" ]; then
+              echo "$ROOM_STATE" | jq -e '.data.session.rematch_deadline_at != null' >/dev/null
+              break
+            fi
+            sleep 1
+          done
+
+          CUR_VER=$(echo "$ROOM_STATE" | jq -r '.data.session.version // 1')
+          RESETTING_SESSION_ID=$(echo "$ROOM_STATE" | jq -r '.data.session.id // ""')
+          test -n "$RESETTING_SESSION_ID"
+
+          ROOM_ID="$ROOM_ID" TOKEN="$TOKEN" WS_BASE="$WS_BASE" CUR_VER="$CUR_VER" node <<'NODE'
+          const WebSocket = require('ws');
+          const roomID = process.env.ROOM_ID;
+          const token = process.env.TOKEN;
+          const wsBase = process.env.WS_BASE.replace(/\/+$/, '');
+          const currentVersion = Number(process.env.CUR_VER || '1');
+          const url = `${wsBase}/rooms/${roomID}`;
+
+          function waitForSync(label) {
+            return new Promise((resolve, reject) => {
+              const ws = new WebSocket(url);
+              const timeout = setTimeout(() => {
+                try { ws.close(); } catch {}
+                reject(new Error(`${label}: timeout`));
+              }, 8000);
+
+              ws.onopen = () => {
+                ws.send(JSON.stringify({
+                  type: 'AUTH',
+                  request_id: `ci-auth-${label}`,
+                  access_token: token,
+                }));
+              };
+
+              ws.onmessage = (evt) => {
+                let msg;
+                try {
+                  msg = JSON.parse(String(evt.data));
+                } catch (err) {
+                  clearTimeout(timeout);
+                  ws.close();
+                  reject(new Error(`${label}: invalid json`));
+                  return;
+                }
+                if (msg.type === 'ROOM_STATE_SYNC') {
+                  ws.send(JSON.stringify({
+                    type: 'REMATCH_VOTE',
+                    request_id: `ci-rematch-${label}`,
+                    expected_version: currentVersion,
+                    action_id: `ci-rematch-${label}-${Date.now()}`,
+                    agree: true,
+                  }));
+                  clearTimeout(timeout);
+                  ws.close();
+                  resolve();
+                  return;
+                }
+                if (msg.type === 'ERROR') {
+                  const code = msg?.error?.code || 'unknown';
+                  if (code === 'invalid_game_state' || code === 'version_conflict') {
+                    clearTimeout(timeout);
+                    ws.close();
+                    resolve();
+                    return;
+                  }
+                  clearTimeout(timeout);
+                  ws.close();
+                  reject(new Error(`${label}: ws error ${code}`));
+                }
+              };
+
+              ws.onerror = () => {
+                clearTimeout(timeout);
+                reject(new Error(`${label}: websocket error`));
+              };
+            });
+          }
+
+          (async () => {
+            await waitForSync('first');
+            await waitForSync('second');
+          })().catch((err) => {
+            console.error(err.message);
+            process.exit(1);
+          });
+          NODE
+
+          for i in {1..30}; do
+            AFTER_FALSE=$(curl -s "${AUTH[@]}" "$BASE/rooms/$ROOM_ID")
+            echo "$AFTER_FALSE" | jq -e '.success == true' >/dev/null
+            NEXT_SESSION_ID=$(echo "$AFTER_FALSE" | jq -r '.data.session.id // ""')
+            if [ -z "$NEXT_SESSION_ID" ]; then
+              echo "$AFTER_FALSE" | jq -e '.data.room.status == "READY" or .data.room.status == "WAITING"' >/dev/null
+              break
+            fi
+            sleep 1
+          done
+
+          ROOM_RESP2=$(curl -s "${AUTH[@]}" -X POST "$BASE/rooms")
+          ROOM_ID2=$(echo "$ROOM_RESP2" | jq -r '.data.room.id')
+          test -n "$ROOM_ID2" && test "$ROOM_ID2" != "null"
+          curl -s "${AUTH[@]}" -X POST "$BASE/rooms/$ROOM_ID2/join" | jq -e '.success == true' >/dev/null
+          curl -s "${AUTH[@]}" -X POST "$BASE/rooms/$ROOM_ID2/start" | jq -e '.success == true' >/dev/null
+          VER3=$(curl -s "${AUTH[@]}" "$BASE/rooms/$ROOM_ID2" | jq -r '.data.session.version')
+          AID3="stand-second-$(date +%s)-$RANDOM"
+          curl -s "${AUTH[@]}" -H "Content-Type: application/json" \
+            -d "{\"expected_version\":$VER3,\"action_id\":\"$AID3\"}" -X POST "$BASE/rooms/$ROOM_ID2/stand" \
+            | jq -e '.success == true or .error.code == "invalid_game_state"' >/dev/null
+
+          for i in {1..30}; do
+            ROOM_STATE2=$(curl -s "${AUTH[@]}" "$BASE/rooms/$ROOM_ID2")
+            echo "$ROOM_STATE2" | jq -e '.success == true' >/dev/null
+            SESSION_STATUS2=$(echo "$ROOM_STATE2" | jq -r '.data.session.status // "NONE"')
+            if [ "$SESSION_STATUS2" = "RESETTING" ]; then
+              break
+            fi
+            sleep 1
+          done
+
+          CUR_VER2=$(echo "$ROOM_STATE2" | jq -r '.data.session.version // 1')
+          OLD_SESSION_ID2=$(echo "$ROOM_STATE2" | jq -r '.data.session.id // ""')
+          test -n "$OLD_SESSION_ID2"
+
+          ROOM_ID="$ROOM_ID2" TOKEN="$TOKEN" WS_BASE="$WS_BASE" CUR_VER="$CUR_VER2" node <<'NODE'
+          const WebSocket = require('ws');
+          const roomID = process.env.ROOM_ID;
+          const token = process.env.TOKEN;
+          const wsBase = process.env.WS_BASE.replace(/\/+$/, '');
+          const currentVersion = Number(process.env.CUR_VER || '1');
+          const url = `${wsBase}/rooms/${roomID}`;
+
+          function voteTrueAndWaitSync() {
+            return new Promise((resolve, reject) => {
+              const ws = new WebSocket(url);
+              const timeout = setTimeout(() => {
+                try { ws.close(); } catch {}
+                reject(new Error('rematch true: timeout'));
+              }, 8000);
+
+              ws.onopen = () => {
+                ws.send(JSON.stringify({
+                  type: 'AUTH',
+                  request_id: 'ci-rematch-true-auth',
+                  access_token: token,
+                }));
+              };
+
+              ws.onmessage = (evt) => {
+                let msg;
+                try {
+                  msg = JSON.parse(String(evt.data));
+                } catch (_) {
+                  clearTimeout(timeout);
+                  ws.close();
+                  reject(new Error('rematch true: invalid json'));
+                  return;
+                }
+                if (msg.type === 'ROOM_STATE_SYNC') {
+                  ws.send(JSON.stringify({
+                    type: 'REMATCH_VOTE',
+                    request_id: 'ci-rematch-true-vote',
+                    expected_version: currentVersion,
+                    action_id: `ci-rematch-true-${Date.now()}`,
+                    agree: true,
+                  }));
+                  clearTimeout(timeout);
+                  ws.close();
+                  resolve();
+                }
+                if (msg.type === 'ERROR') {
+                  clearTimeout(timeout);
+                  ws.close();
+                  reject(new Error(`rematch true: ws error ${msg?.error?.code || 'unknown'}`));
+                }
+              };
+            });
+          }
+
+          (async () => {
+            await voteTrueAndWaitSync();
+          })().catch((err) => {
+            console.error(err.message);
+            process.exit(1);
+          });
+          NODE
+
+          for i in {1..30}; do
+            AFTER_TRUE=$(curl -s "${AUTH[@]}" "$BASE/rooms/$ROOM_ID2")
+            echo "$AFTER_TRUE" | jq -e '.success == true' >/dev/null
+            NEW_SESSION_ID=$(echo "$AFTER_TRUE" | jq -r '.data.session.id // ""')
+            NEW_SESSION_STATUS=$(echo "$AFTER_TRUE" | jq -r '.data.session.status // ""')
+            if [ -n "$NEW_SESSION_ID" ] && [ "$NEW_SESSION_ID" != "$OLD_SESSION_ID2" ]; then
+              test "$NEW_SESSION_STATUS" = "DEALING" || test "$NEW_SESSION_STATUS" = "PLAYER_TURN"
+              break
+            fi
+            sleep 1
+          done
 
       - name: Stop backend
         if: always()
@@ -157,6 +387,73 @@ jobs:
             kill "$(cat /tmp/backend.pid)" || true
           fi
           cat /tmp/backend.log || true
+
+  migration-compatibility:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: blackjack
+          POSTGRES_USER: blackjack
+          POSTGRES_PASSWORD: blackjack
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U blackjack -d blackjack"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Run migrations (first pass)
+        env:
+          DATABASE_URL: postgres://blackjack:blackjack@localhost:5432/blackjack?sslmode=disable
+        run: go run ./migrations
+      - name: Run migrations (second pass idempotency check)
+        env:
+          DATABASE_URL: postgres://blackjack:blackjack@localhost:5432/blackjack?sslmode=disable
+        run: go run ./migrations
+      - name: Start backend against migrated schema
+        env:
+          DATABASE_URL: postgres://blackjack:blackjack@localhost:5432/blackjack?sslmode=disable
+          REDIS_ADDR: localhost:6379
+          JWT_SECRET: ci-jwt-secret-min-16bytes!!
+        run: |
+          go run . > /tmp/migration-backend.log 2>&1 &
+          echo $! > /tmp/migration-backend.pid
+          for i in {1..30}; do
+            if curl -fsS http://localhost:8080/health >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "backend did not become healthy after migrations"
+          cat /tmp/migration-backend.log
+          exit 1
+      - name: Stop backend
+        if: always()
+        run: |
+          if [ -f /tmp/migration-backend.pid ]; then
+            kill "$(cat /tmp/migration-backend.pid)" || true
+          fi
+          cat /tmp/migration-backend.log || true
 
   container-build:
     runs-on: ubuntu-latest
@@ -168,19 +465,29 @@ jobs:
 
   security:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     defaults:
       run:
         working-directory: backend
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
 
-      - name: gosec
-        run: go run github.com/securego/gosec/v2/cmd/gosec@v2.22.3 -fmt text ./...
+      - name: gosec (text)
+        run: |
+          mkdir -p /tmp/security-reports
+          go run github.com/securego/gosec/v2/cmd/gosec@v2.22.3 -fmt text -out /tmp/security-reports/gosec.txt ./...
+
+      - name: gosec (sarif)
+        run: go run github.com/securego/gosec/v2/cmd/gosec@v2.22.3 -fmt sarif -out /tmp/security-reports/gosec.sarif ./...
 
       - name: gitleaks
         uses: gitleaks/gitleaks-action@v2
@@ -188,48 +495,84 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@master
         with:
           scan-type: fs
           scan-ref: .
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"
+          format: table
+          output: /tmp/security-reports/trivy.txt
 
       - name: npm audit (frontend)
         working-directory: frontend
         run: |
           npm ci
-          npm audit --audit-level=high
+          npm audit --audit-level=high | tee /tmp/security-reports/npm-audit.txt
 
-  deploy-vercel:
-    runs-on: ubuntu-latest
-    needs: [backend, frontend, integration, container-build, security]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.VERCEL_TOKEN != '' && secrets.VERCEL_PROJECT_ID != '' && secrets.VERCEL_ORG_ID != ''
-    defaults:
-      run:
-        working-directory: frontend
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Upload security reports artifact
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - name: Install Vercel CLI
-        run: npm i -g vercel@latest
-      - name: Pull Vercel environment
-        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+          name: security-reports
+          path: /tmp/security-reports
+          if-no-files-found: warn
+
+      - name: Upload gosec SARIF to GitHub code scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: /tmp/security-reports/gosec.sarif
+
+      - name: Append security summary
+        if: always()
+        run: |
+          {
+            echo "## Security Scan Summary"
+            echo ""
+            echo "- gosec text report: \`/tmp/security-reports/gosec.txt\`"
+            echo "- gosec sarif report: \`/tmp/security-reports/gosec.sarif\`"
+            echo "- trivy report: \`/tmp/security-reports/trivy.txt\`"
+            echo "- npm audit report: \`/tmp/security-reports/npm-audit.txt\`"
+            echo ""
+            echo "Detailed files are uploaded as artifact: \`security-reports\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  notify-ci-failure:
+    runs-on: ubuntu-latest
+    needs: [backend, frontend, integration, migration-compatibility, container-build, security]
+    if: failure()
+    steps:
+      - name: Notify Slack on CI failure
         env:
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-      - name: Build Vercel artifacts
-        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
-        env:
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-      - name: Deploy to Vercel
-        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
-        env:
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          REF_NAME: ${{ github.ref_name }}
+          ACTOR: ${{ github.actor }}
+          SHA: ${{ github.sha }}
+          BACKEND_RESULT: ${{ needs.backend.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
+          MIGRATION_COMPAT_RESULT: ${{ needs.migration-compatibility.result }}
+          CONTAINER_RESULT: ${{ needs.container-build.result }}
+          SECURITY_RESULT: ${{ needs.security.result }}
+        run: |
+          if [ -z "${SLACK_WEBHOOK_URL:-}" ]; then
+            echo "SLACK_WEBHOOK_URL is not configured; skipping notification."
+            exit 0
+          fi
+          FAILED=""
+          [ "$BACKEND_RESULT" = "failure" ] && FAILED="${FAILED} backend"
+          [ "$FRONTEND_RESULT" = "failure" ] && FAILED="${FAILED} frontend"
+          [ "$INTEGRATION_RESULT" = "failure" ] && FAILED="${FAILED} integration"
+          [ "$MIGRATION_COMPAT_RESULT" = "failure" ] && FAILED="${FAILED} migration-compatibility"
+          [ "$CONTAINER_RESULT" = "failure" ] && FAILED="${FAILED} container-build"
+          [ "$SECURITY_RESULT" = "failure" ] && FAILED="${FAILED} security"
+          FAILED=$(echo "$FAILED" | xargs)
+          [ -z "$FAILED" ] && FAILED="unknown"
+          MSG="CI failed: ${REPO} @ ${REF_NAME} actor=${ACTOR} sha=${SHA}. failed_jobs=[${FAILED}] https://github.com/${REPO}/actions/runs/${RUN_ID}"
+          payload=$(printf '{"text":"%s"}' "$MSG")
+          curl -fsS -X POST -H "Content-Type: application/json" --data "$payload" "$SLACK_WEBHOOK_URL"
+

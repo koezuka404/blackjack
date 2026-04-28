@@ -59,8 +59,8 @@ var (
 	}
 )
 
-// ConfigureWebSocketAllowedOrigins は本番用に WS の Origin を制限する。
-// origins が空のときは CheckOrigin が常に true（ローカル開発向け）。1 件以上あるときは Origin ヘッダがいずれかと完全一致する場合のみ許可する。
+
+
 func ConfigureWebSocketAllowedOrigins(origins []string) {
 	trimmed := make([]string, 0, len(origins))
 	for _, o := range origins {
@@ -84,7 +84,7 @@ func ConfigureWebSocketAllowedOrigins(origins []string) {
 	}
 }
 
-// wsShouldMarkDisconnected は環境変数 BLACKJACK_WS_MARK_DISCONNECTED（true/false）で WS 切断時の DISCONNECTED 反映を制御する。未設定は true。
+
 func wsShouldMarkDisconnected() bool {
 	v := strings.TrimSpace(os.Getenv("BLACKJACK_WS_MARK_DISCONNECTED"))
 	if v == "" {
@@ -97,8 +97,8 @@ func wsShouldMarkDisconnected() bool {
 	return b
 }
 
-// ConfigureWebSocketConnectionEpochStore configures Redis-backed connection_epoch enforcement (§13.3).
-// If rdb is nil, epoch checks are disabled and single-process in-memory latest-only behavior remains.
+
+
 func ConfigureWebSocketConnectionEpochStore(rdb *redis.Client, ttl time.Duration) {
 	wsEpochRedis = rdb
 	if ttl > 0 {
@@ -169,7 +169,7 @@ func preWSConnectionKey(c echo.Context) string {
 	return "ws-open-pre:" + ip
 }
 
-// RoomWS は卓用 WebSocket（Upgrade 直後の AUTH で user 確定、受信ループ・レート制限・多重接続の最新のみ有効）。
+
 func (r *RoomController) RoomWS(c echo.Context) error {
 	roomID := c.Param("id")
 	if roomID == "" {
@@ -272,7 +272,7 @@ func (r *RoomController) RoomWS(c echo.Context) error {
 			isLatest := globalRoomHub.isLatest(roomID, userID, conn)
 			isCurrentEpoch, epochErr := isCurrentConnectionEpoch(context.Background(), roomID, userID, meta.epoch)
 			if epochErr != nil {
-				// Redis 瞬断時は誤切断を避けるため in-memory latest 判定のみで継続する。
+
 				isCurrentEpoch = true
 			}
 			if isLatest && isCurrentEpoch && wsShouldMarkDisconnected() {
@@ -289,7 +289,7 @@ func (r *RoomController) RoomWS(c echo.Context) error {
 				return
 			}
 			if r.limiter != nil {
-				// WS更新イベントにもRedis token bucketを適用する
+
 				result, err := r.limiter.Allow(context.Background(), "ws:"+userID)
 				if err != nil {
 					sendWSError(conn, meta, dto.WSErrorInternal, err.Error())
@@ -328,7 +328,7 @@ func (r *RoomController) RoomWS(c echo.Context) error {
 	return nil
 }
 
-// broadcastRoomState は自インスタンスの WS 接続へ配信し、続けて Redis Pub/Sub で他インスタンスへ伝える（Phase 3）。
+
 func (r *RoomController) broadcastRoomState(ctx context.Context, roomID, actorUserID, eventType string) {
 	r.broadcastRoomStateLocal(ctx, roomID, actorUserID, eventType)
 	if r.syncBroker != nil {
@@ -336,14 +336,14 @@ func (r *RoomController) broadcastRoomState(ctx context.Context, roomID, actorUs
 	}
 }
 
-// BroadcastRoomStateFromPeer は他インスタンスからの Pub/Sub 通知に応じ、ローカル接続のみへ同期する（再 publish しない）。
+
 func (r *RoomController) BroadcastRoomStateFromPeer(ctx context.Context, roomID, eventType string) {
 	r.broadcastRoomStateLocal(ctx, roomID, "", eventType)
 }
 
-// broadcastRoomStateLocal は卓の全接続へユーザー別に ROOM_STATE_SYNC を送る。
+
 func (r *RoomController) broadcastRoomStateLocal(ctx context.Context, roomID, actorUserID, eventType string) {
-	// room参加中の全接続へ、ユーザーごとの公開範囲で state を組み立てて送信する
+
 	snapshot := globalRoomHub.snapshot(roomID)
 	for conn, meta := range snapshot {
 		state, err := r.room.GetRoomState(ctx, roomID, meta.userID)
@@ -362,12 +362,12 @@ func (r *RoomController) broadcastRoomStateLocal(ctx context.Context, roomID, ac
 	}
 }
 
-// BroadcastRoomSync はバックグラウンド処理後に同期イベントを送る。
+
 func (r *RoomController) BroadcastRoomSync(ctx context.Context, roomID string) {
 	r.broadcastRoomState(ctx, roomID, "", dto.WSEventRoomSync)
 }
 
-// writeWS はコネクション単位で書き込みを直列化する。
+
 func writeWS(conn *websocket.Conn, meta wsConnMeta, payload []byte) error {
 	meta.writeMu.Lock()
 	defer meta.writeMu.Unlock()
@@ -378,7 +378,7 @@ func writeWS(conn *websocket.Conn, meta wsConnMeta, payload []byte) error {
 	return err
 }
 
-// sendWSError は WS 用の ERROR ペイロードを送る。
+
 func sendWSError(conn *websocket.Conn, meta wsConnMeta, code, message string) {
 	sendWSErrorWithRetryPtr(conn, meta, code, message, nil)
 }
@@ -388,7 +388,7 @@ func sendWSErrorWithRetry(conn *websocket.Conn, meta wsConnMeta, code, message s
 }
 
 func sendWSErrorWithRetryPtr(conn *websocket.Conn, meta wsConnMeta, code, message string, retryAfterMS *int64) {
-	// エラー契約は { type: "ERROR", error: { code, message } } で固定
+
 	b, _ := json.Marshal(dto.WSErrorEvent{
 		Type: dto.WSEventError,
 		Error: dto.WSErrorBody{
@@ -400,13 +400,13 @@ func sendWSErrorWithRetryPtr(conn *websocket.Conn, meta wsConnMeta, code, messag
 	_ = writeWS(conn, meta, b)
 }
 
-// sendWSPong は PING に対する PONG。
+
 func sendWSPong(conn *websocket.Conn, meta wsConnMeta) {
 	b, _ := json.Marshal(map[string]string{"type": dto.WSEventPong})
 	_ = writeWS(conn, meta, b)
 }
 
-// buildRoomDTO は閲覧者ごとの手札公開範囲を反映した同期ペイロードを組み立てる。
+
 func buildRoomDTO(s *usecase.RoomState, userID string) dto.RoomStateSyncPayload {
 	out := dto.RoomStateSyncPayload{
 		Room: dto.RoomJSON{ID: s.Room.ID, Status: string(s.Room.Status)},
@@ -470,7 +470,7 @@ func buildRoomDTO(s *usecase.RoomState, userID string) dto.RoomStateSyncPayload 
 			CardCount: len(p.Hand),
 		}
 		if item.IsMe {
-			// 仕様どおり自分のhandのみ公開　他人はcard_countのみ返す
+
 			cards := make([]string, 0, len(p.Hand))
 			for _, c := range p.Hand {
 				cards = append(cards, c.Rank+c.Suit)
@@ -493,7 +493,7 @@ func buildRoomDTO(s *usecase.RoomState, userID string) dto.RoomStateSyncPayload 
 	return out
 }
 
-// add は卓に接続を登録し、同一ユーザーの旧接続があれば返す（切断用）。
+
 func (h *roomHub) add(roomID string, conn *websocket.Conn, meta wsConnMeta) *websocket.Conn {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -510,7 +510,7 @@ func (h *roomHub) add(roomID string, conn *websocket.Conn, meta wsConnMeta) *web
 	return old
 }
 
-// remove は卓ハブから接続を外す。
+
 func (h *roomHub) remove(roomID string, conn *websocket.Conn) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -528,7 +528,7 @@ func (h *roomHub) remove(roomID string, conn *websocket.Conn) {
 	}
 }
 
-// snapshot はブロードキャスト用に接続一覧のコピーを取る。
+
 func (h *roomHub) snapshot(roomID string) map[*websocket.Conn]wsConnMeta {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -539,7 +539,7 @@ func (h *roomHub) snapshot(roomID string) map[*websocket.Conn]wsConnMeta {
 	return out
 }
 
-// isLatest は当該接続が room+user の最新かどうか（切断時の DB 更新判定）。
+
 func (h *roomHub) isLatest(roomID, userID string, conn *websocket.Conn) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()

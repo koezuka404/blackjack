@@ -4,7 +4,7 @@ import (
 	"time"
 )
 
-// GORM row models for PostgreSQL; domain types live in model.
+
 
 type RoomRecord struct {
 	ID               string    `gorm:"type:uuid;primaryKey"`

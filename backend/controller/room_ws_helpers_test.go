@@ -36,7 +36,7 @@ func TestWSConfigAndEpochHelpers(t *testing.T) {
 	if !wsUpgrader.CheckOrigin(req) {
 		t.Fatal("origin should be allowed when no configured origins")
 	}
-	// cover default upgrader CheckOrigin function literal
+
 	wsUpgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 	if !wsUpgrader.CheckOrigin(req) {
 		t.Fatal("default check origin should allow")
@@ -134,7 +134,7 @@ func TestWSConfigAndEpochHelpers(t *testing.T) {
 	}
 	_ = rdb2.Close()
 
-	// hook error branches
+
 	ConfigureWebSocketConnectionEpochStore(&redis.Client{}, time.Minute)
 	wsEpochIncrFn = func(context.Context, *redis.Client, string) (int64, error) { return 0, errors.New("incr") }
 	if _, err := registerConnectionEpoch(context.Background(), "r1", "u1"); err == nil {

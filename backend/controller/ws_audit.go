@@ -10,14 +10,14 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// WsAuditLogContext は長寿命 WS ゴルーチン用（Echo の Request 終了後も監査・メトリクスに使う）。
+
 type WsAuditLogContext struct {
 	Logger    echo.Logger
 	RequestID string
-	SessionID any // JWT の jti（監査の session_id 相当）
+	SessionID any
 }
 
-// logWSEvent は WS メッセージごとの構造化監査ログを出す（HTTP AuditLogMiddleware と同一スキーマ）。
+
 func logWSEvent(ws *WsAuditLogContext, req dto.WSActionRequest, roomID, userID string, gameSessionID *string, before, after *int64, start time.Time, result, errorCode string, extra map[string]any) {
 	if ws == nil {
 		return

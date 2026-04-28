@@ -10,7 +10,7 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// Register wires HTTP/WS routes and returns RoomController for broadcasts.
+
 func Register(
 	e *echo.Echo,
 	store repository.Store,

@@ -25,7 +25,7 @@ const (
 	WSErrorInternal        = "internal_error"
 )
 
-// WSAuthMessage は接続直後の 1 通目に送る JWT（URL に載せない）。
+
 type WSAuthMessage struct {
 	Type        string `json:"type"`
 	RequestID   string `json:"request_id,omitempty"`

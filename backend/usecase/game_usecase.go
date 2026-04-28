@@ -25,7 +25,7 @@ var ErrForbiddenAction = errors.New("forbidden")
 
 const PlayerTurnTimeout = 15 * time.Second
 
-// HostTransfer は卓ホスト移譲が発生したときの監査用メタデータ（仕様 12.7 / 監査 20.4）。
+
 type HostTransfer struct {
 	RoomID             string
 	PreviousHostUserID string
@@ -48,7 +48,7 @@ type RoomUsecase interface {
 	MarkDisconnected(ctx context.Context, roomID, userID string) error
 	AutoStandDueSessions(ctx context.Context) ([]string, error)
 	SuggestPlayerAction(ctx context.Context, roomID, userID string) (*PlayHint, error)
-	// ResetRoomForDebug は開発用に卓を初期状態へ戻す（§15.3）。本番無効化は Controller 側。
+
 	ResetRoomForDebug(ctx context.Context, roomID, userID string) (*model.Room, error)
 }
 
@@ -62,7 +62,7 @@ type RoomState struct {
 	CanRematch bool
 }
 
-// PlayHint は中級者向けヒューリスティックによる推奨手と説明。
+
 type PlayHint struct {
 	Recommendation string
 	SessionVersion int64
@@ -75,7 +75,7 @@ type roomService struct {
 	engine    model.RoundEngine
 }
 
-// NewRoomUsecase はルーム・ゲーム進行のユースケースを組み立てる。
+
 func NewRoomUsecase(store repository.Store, evaluator model.HandEvaluator, engine model.RoundEngine) RoomUsecase {
 	return &roomService{
 		store:     store,
@@ -84,7 +84,7 @@ func NewRoomUsecase(store repository.Store, evaluator model.HandEvaluator, engin
 	}
 }
 
-// CreateRoom はホストのみがルーム行を作成する（卓・参加者はまだ作らない）。
+
 func (u *roomService) CreateRoom(ctx context.Context, hostUserID string) (*model.Room, error) {
 	if hostUserID == "" {
 		return nil, ErrUnauthorizedUser
@@ -109,7 +109,7 @@ func (u *roomService) CreateRoom(ctx context.Context, hostUserID string) (*model
 	return room, nil
 }
 
-// JoinRoom はホスト本人が卓に参加（人間プレイヤー1名まで）し、ルーム状態を再計算する。
+
 func (u *roomService) JoinRoom(ctx context.Context, roomID, userID string) (*model.Room, error) {
 	if userID == "" {
 		return nil, ErrUnauthorizedUser
@@ -164,11 +164,11 @@ func (u *roomService) JoinRoom(ctx context.Context, roomID, userID string) (*mod
 				return err
 			}
 		} else {
-			// 一度 LEFT になった同一ユーザーは既存行を再利用して再参加させる。
+
 			if existing.Status != model.RoomPlayerLeft {
 				return model.ErrRoomFull
 			}
-			if err := existing.SetStatus(model.RoomPlayerActive); err != nil {
+			if err := roomPlayerSetStatusUC(existing, model.RoomPlayerActive); err != nil {
 				return err
 			}
 			existing.LeftAt = nil
@@ -184,7 +184,7 @@ func (u *roomService) JoinRoom(ctx context.Context, roomID, userID string) (*mod
 	return room, nil
 }
 
-// GetRoom は参加者がルームと現在セッション（あれば）を取得する。
+
 func (u *roomService) GetRoom(ctx context.Context, roomID, userID string) (*model.Room, *model.GameSession, error) {
 	if userID == "" {
 		return nil, nil, ErrUnauthorizedUser
@@ -221,7 +221,7 @@ func (u *roomService) GetRoom(ctx context.Context, roomID, userID string) (*mode
 	return room, sess, nil
 }
 
-// ListRooms はユーザーがホストのルーム一覧を返す。
+
 func (u *roomService) ListRooms(ctx context.Context, userID string) ([]*model.Room, error) {
 	if userID == "" {
 		return nil, ErrUnauthorizedUser
@@ -229,7 +229,7 @@ func (u *roomService) ListRooms(ctx context.Context, userID string) ([]*model.Ro
 	return u.store.ListRoomsByUserID(ctx, userID)
 }
 
-// LeaveRoom は参加者が卓から離脱し、ルーム状態を更新する。
+
 func (u *roomService) LeaveRoom(ctx context.Context, roomID, userID string) (*model.Room, *HostTransfer, error) {
 	if userID == "" {
 		return nil, nil, ErrUnauthorizedUser
@@ -267,7 +267,7 @@ func (u *roomService) LeaveRoom(ctx context.Context, roomID, userID string) (*mo
 			activeAfterLeave++
 		}
 	}
-	// 仕様 §12.7: host が LEFT の場合は最小 seat の有効参加者へ委譲する。
+
 	if room.HostUserID == userID {
 		if nextHost := selectNextHost(players, userID); nextHost != nil {
 			transfer = &HostTransfer{
@@ -315,7 +315,7 @@ func selectNextHost(players []*model.RoomPlayer, leavingUserID string) *model.Ro
 	return candidates[0]
 }
 
-// ResetRoomForDebug は開発用に game_sessions 系と room_players を削除し、卓を WAITING に戻す（§15.3）。
+
 func (u *roomService) ResetRoomForDebug(ctx context.Context, roomID, userID string) (*model.Room, error) {
 	if userID == "" {
 		return nil, ErrUnauthorizedUser
@@ -358,7 +358,7 @@ func (u *roomService) ResetRoomForDebug(ctx context.Context, roomID, userID stri
 	return out, nil
 }
 
-// GetRoomHistory は卓のラウンド監査ログ（round_logs）を参加者向けに返す。
+
 func (u *roomService) GetRoomHistory(ctx context.Context, roomID, userID string) ([]*model.RoundLog, error) {
 	if userID == "" {
 		return nil, ErrUnauthorizedUser
@@ -385,7 +385,7 @@ func (u *roomService) GetRoomHistory(ctx context.Context, roomID, userID string)
 	return u.store.ListRoundLogsByRoomID(ctx, roomID)
 }
 
-// StartRoom はホストがゲームを開始し、山札・配札・最初のセッションを作成する。
+
 func (u *roomService) StartRoom(ctx context.Context, roomID, userID string) (*model.Room, *model.GameSession, error) {
 	if userID == "" {
 		return nil, nil, ErrUnauthorizedUser
@@ -479,17 +479,17 @@ func (u *roomService) StartRoom(ctx context.Context, roomID, userID string) (*mo
 	return room, sess, nil
 }
 
-// Hit はプレイヤーのヒット操作（冪等・version 整合つき）。
+
 func (u *roomService) Hit(ctx context.Context, roomID, userID string, expectedVersion int64, actionID string) (*model.Room, *model.GameSession, error) {
 	return u.playerTurn(ctx, roomID, userID, expectedVersion, actionID, true)
 }
 
-// Stand はプレイヤーのスタンド操作（冪等・version 整合つき）。
+
 func (u *roomService) Stand(ctx context.Context, roomID, userID string, expectedVersion int64, actionID string) (*model.Room, *model.GameSession, error) {
 	return u.playerTurn(ctx, roomID, userID, expectedVersion, actionID, false)
 }
 
-// playerTurn は Hit/Stand の共通処理（状態検証・ライブラリ連携・永続化）。
+
 func (u *roomService) playerTurn(ctx context.Context, roomID, userID string, expectedVersion int64, actionID string, hit bool) (*model.Room, *model.GameSession, error) {
 	if userID == "" {
 		return nil, nil, ErrUnauthorizedUser
@@ -633,7 +633,7 @@ func (u *roomService) playerTurn(ctx context.Context, roomID, userID string, exp
 	return room, sess, nil
 }
 
-// GetRoomState は WS/HTTP 同期用にルーム・セッション・手札可否を組み立てる。
+
 func (u *roomService) GetRoomState(ctx context.Context, roomID, userID string) (*RoomState, error) {
 	room, sess, err := u.GetRoom(ctx, roomID, userID)
 	if err != nil {
@@ -664,7 +664,7 @@ func (u *roomService) GetRoomState(ctx context.Context, roomID, userID string) (
 	return state, nil
 }
 
-// SuggestPlayerAction は現在局面での HIT/STAND 推奨を返す（プレイヤーターンでヒット可能なときのみ）。
+
 func (u *roomService) SuggestPlayerAction(ctx context.Context, roomID, userID string) (*PlayHint, error) {
 	state, err := u.GetRoomState(ctx, roomID, userID)
 	if err != nil {
@@ -687,7 +687,7 @@ func (u *roomService) SuggestPlayerAction(ctx context.Context, roomID, userID st
 		return nil, ErrInvalidGameState
 	}
 	up := state.Dealer.Hand[0]
-	// 推奨は純粋関数で計算し、ここでは結果をレスポンス用に整形するだけ。
+
 	wantHit := model.RecommendHitOrStand(u.evaluator, hand, up)
 	rec := "STAND"
 	rationale := "中級向け簡略ベーシック戦略（S17・ダブル/スプリットなし）に基づきスタンド。"
@@ -702,7 +702,7 @@ func (u *roomService) SuggestPlayerAction(ctx context.Context, roomID, userID st
 	}, nil
 }
 
-// rematchEligibleUserIDs は再戦投票の対象となる人間プレイヤー user_id を返す（§12.1）。
+
 func rematchEligibleUserIDs(players []*model.RoomPlayer) []string {
 	out := make([]string, 0)
 	for _, p := range players {
@@ -713,7 +713,7 @@ func rematchEligibleUserIDs(players []*model.RoomPlayer) []string {
 	return out
 }
 
-// rematchAgreeMapAtDeadline は締切時点の賛否マップ（未投票は false）（§12.5）。
+
 func rematchAgreeMapAtDeadline(eligible []string, votes []*model.RematchVote) map[string]bool {
 	byUser := make(map[string]bool)
 	for _, v := range votes {
@@ -730,7 +730,7 @@ func rematchAgreeMapAtDeadline(eligible []string, votes []*model.RematchVote) ma
 	return m
 }
 
-// hasExplicitRematchDenial は誰かが明示的に否認したか（締切前の即時不成⽴用）。
+
 func hasExplicitRematchDenial(eligible []string, agreeMap map[string]bool) bool {
 	for _, uid := range eligible {
 		if v, ok := agreeMap[uid]; ok && !v {
@@ -740,7 +740,7 @@ func hasExplicitRematchDenial(eligible []string, agreeMap map[string]bool) bool 
 	return false
 }
 
-// finalizeRematchFailureTx は再戦不成⽴時に current_session を外しルームだけ更新する（§9.3.11）。
+
 func (u *roomService) finalizeRematchFailureTx(ctx context.Context, tx repository.Store, room *model.Room) error {
 	room.CurrentSessionID = nil
 	players, err := tx.ListRoomPlayersByRoomID(ctx, room.ID)
@@ -761,7 +761,7 @@ func (u *roomService) finalizeRematchFailureTx(ctx context.Context, tx repositor
 	return tx.UpdateRoom(ctx, room)
 }
 
-// rematchUnanimousSuccessTx は全会一致で次ラウンドのセッションを作成する（§9.3.10）。
+
 func (u *roomService) rematchUnanimousSuccessTx(ctx context.Context, tx repository.Store, room *model.Room, prev *model.GameSession, playerUserID string, now time.Time, expectedVersion int64) (*model.GameSession, error) {
 	prev.IncrementVersion()
 	prev.Touch(now)
@@ -822,7 +822,7 @@ func (u *roomService) rematchUnanimousSuccessTx(ctx context.Context, tx reposito
 	return next, nil
 }
 
-// VoteRematch は再戦投票を処理し、全会一致・否認・継続のいずれかに分岐する。
+
 func (u *roomService) VoteRematch(ctx context.Context, roomID, userID string, agree bool, expectedVersion int64, actionID string) (*model.Room, *model.GameSession, error) {
 	if userID == "" {
 		return nil, nil, ErrUnauthorizedUser
@@ -957,7 +957,7 @@ func (u *roomService) VoteRematch(ctx context.Context, roomID, userID string, ag
 	return room, sess, nil
 }
 
-// initialDeal はラウンド開始時の4枚配札（プレイヤー2・ディーラー2）を行う。
+
 func (u *roomService) initialDeal(sess *model.GameSession, p *model.PlayerState, d *model.DealerState) error {
 	deal := func(hand []model.StoredCard, c model.StoredCard) ([]model.StoredCard, error) {
 		return u.engine.ApplyPlayerHit(hand, c)
@@ -1001,7 +1001,7 @@ func (u *roomService) initialDeal(sess *model.GameSession, p *model.PlayerState,
 	return nil
 }
 
-// dealerresult はディーラー手を公開し勝敗・round_log 用ペイロードを確定する。
+
 func (u *roomService) dealerresult(sess *model.GameSession, p *model.PlayerState, d *model.DealerState, now time.Time) (*model.RoundLog, error) {
 	d.RevealHole()
 	if err := gameSessionTransition(sess, model.SessionStatusResult); err != nil {
@@ -1037,7 +1037,7 @@ func (u *roomService) dealerresult(sess *model.GameSession, p *model.PlayerState
 	}, nil
 }
 
-// dealerresultTimeForfeit は操作時間切れでプレイヤーを敗北に確定する（セッションはディーラーターン前提）。
+
 func (u *roomService) dealerresultTimeForfeit(sess *model.GameSession, p *model.PlayerState, d *model.DealerState, now time.Time) (*model.RoundLog, error) {
 	d.RevealHole()
 	if err := gameSessionTransition(sess, model.SessionStatusResult); err != nil {
@@ -1070,7 +1070,7 @@ func (u *roomService) dealerresultTimeForfeit(sess *model.GameSession, p *model.
 	}, nil
 }
 
-// MarkConnected は WS 接続時に room_players を ACTIVE に戻す。
+
 func (u *roomService) MarkConnected(ctx context.Context, roomID, userID string) error {
 	if roomID == "" || userID == "" {
 		return ErrInvalidInput
@@ -1088,7 +1088,7 @@ func (u *roomService) MarkConnected(ctx context.Context, roomID, userID string) 
 	return u.store.UpdateRoomPlayer(ctx, p)
 }
 
-// MarkDisconnected は WS 切断時に room_players を DISCONNECTED にする。
+
 func (u *roomService) MarkDisconnected(ctx context.Context, roomID, userID string) error {
 	if roomID == "" || userID == "" {
 		return ErrInvalidInput
@@ -1109,7 +1109,7 @@ func (u *roomService) MarkDisconnected(ctx context.Context, roomID, userID strin
 	return u.store.UpdateRoomPlayer(ctx, p)
 }
 
-// AutoStandDueSessions はタイムアウト・ディーラー進行・再戦締切をまとめて処理し、更新があった room_id を返す。
+
 func (u *roomService) AutoStandDueSessions(ctx context.Context) ([]string, error) {
 	now := time.Now().UTC()
 	sessions, err := u.store.ListSessionsByStatusAndDeadlineBefore(ctx, model.SessionStatusPlayerTurn, now)
@@ -1157,7 +1157,7 @@ func (u *roomService) AutoStandDueSessions(ctx context.Context) ([]string, error
 	return updatedRooms, nil
 }
 
-// processRematchDeadline は RESETTING の再戦締切到達時に成⽴/不成⽴を確定する。
+
 func (u *roomService) processRematchDeadline(ctx context.Context, sessionID string) error {
 	return u.store.Transaction(ctx, func(tx repository.Store) error {
 		sess, err := tx.GetSessionForUpdate(ctx, sessionID)
@@ -1199,7 +1199,7 @@ func (u *roomService) processRematchDeadline(ctx context.Context, sessionID stri
 	})
 }
 
-// playerStand はプレイヤーターン締切超過時に操作時間切れ敗北を適用する（ヒューリスティック時は既存どおり Hit を試みる）。
+
 func (u *roomService) playerStand(ctx context.Context, sessionID string) error {
 	sess, err := u.store.GetSession(ctx, sessionID)
 	if err != nil {
@@ -1226,7 +1226,7 @@ func (u *roomService) playerStand(ctx context.Context, sessionID string) error {
 	}
 	if strings.TrimSpace(os.Getenv("BLACKJACK_PLAYER_TIMEOUT_POLICY")) == "heuristic" && len(dealer.Hand) > 0 {
 		if model.RecommendHitOrStand(u.evaluator, player.Hand, dealer.Hand[0]) {
-			// 通常の Hit ユースケースを通して version/冪等ルールを再利用する。
+
 			actionID := "auto-heuristic-hit:" + sessionID + ":" + strconv.FormatInt(sess.Version, 10)
 			_, _, err := u.Hit(ctx, room.ID, player.UserID, sess.Version, actionID)
 			return err
@@ -1298,7 +1298,7 @@ func (u *roomService) playerStand(ctx context.Context, sessionID string) error {
 	return err
 }
 
-// dealerTurn はディーラーターンを1手進める（1ドロー or 結果確定）。
+
 func (u *roomService) dealerTurn(ctx context.Context, sessionID string) error {
 	sess, err := u.store.GetSession(ctx, sessionID)
 	if err != nil {
@@ -1381,7 +1381,7 @@ func (u *roomService) dealerTurn(ctx context.Context, sessionID string) error {
 	return err
 }
 
-// newShuffledDeck は52枚の山札を生成してシャッフルする。
+
 func newShuffledDeck() []model.StoredCard {
 	suits := []string{"S", "H", "D", "C"}
 	ranks := []string{"A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"}

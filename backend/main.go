@@ -1,12 +1,12 @@
-// 運用関連の環境変数: PORT（既定 8080）, WS_ALLOWED_ORIGINS（カンマ区切り・空なら WS Origin 許可は開発モード）,
-// BLACKJACK_WS_MARK_DISCONNECTED（true/false・WS 切断時に DISCONNECTED を DB 反映するか、既定 true）,
-// WS_CONNECTION_EPOCH_TTL（例: 120s。複数インスタンス用 connection_epoch TTL、既定 120s）,
-// SERVER_ID（複数インスタンス時の Pub/Sub 重複防止用。未設定は起動ごとに UUID）,
-// BLACKJACK_PLAYER_TIMEOUT_POLICY（空または未設定: タイムアウトは自動スタンド。heuristic: 中級向けヒューリスティックでヒット可能なら Hit を試みる）,
-// REDIS_ROOM_ADDR（ゲームルーム同期/WS connection_epoch 用。未設定時 REDIS_ADDR を参照、既定 localhost:6379）,
-// REDIS_RATE_LIMIT_ADDR（レートリミット用。未設定時 REDIS_ADDR を参照、既定 localhost:6379）,
-// JWT_SECRET（HS256 用。16 文字以上必須）,
-// WS_AUTH_DEADLINE（既定 15s。Upgrade 後、最初の AUTH メッセージを待つ読み取り期限。例: 30s）,
+
+
+
+
+
+
+
+
+
 package main
 
 import (
@@ -35,10 +35,10 @@ import (
 var (
 	_ = websocket.ErrBadHandshake
 
-	// mainEntryFn は既定でシグナル待ち＋runApp。テストでは差し替え可能。
+
 	mainEntryFn = defaultMainEntry
 
-	// fatalLogFn は runApp 失敗時の終了処理（テストで差し替え可能）。
+
 	fatalLogFn = log.Fatal
 )
 
@@ -99,12 +99,12 @@ var (
 	autoStandWorkerInterval = 1 * time.Second
 	snapshotWorkerInterval  = 10 * time.Second
 
-	// autoStandDueSessionsFn はテストで差し替え可能（既定は RoomUsecase 実装）。
+
 	autoStandDueSessionsFn = func(ctx context.Context, uc usecase.RoomUsecase) ([]string, error) {
 		return uc.AutoStandDueSessions(ctx)
 	}
 
-	// broadcastRoomSyncFn はテストで差し替え可能（既定は RoomController 実装）。
+
 	broadcastRoomSyncFn = func(ctx context.Context, rc *controller.RoomController, roomID string) {
 		rc.BroadcastRoomSync(ctx, roomID)
 	}

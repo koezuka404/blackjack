@@ -7,9 +7,9 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// BuildEntry は仕様 20 章に沿った構造化監査ログ 1 行分（HTTP / WebSocket 共通スキーマ）。
-// session_id は JWT の jti（監査用相関）または旧 Cookie セッション ID。game_session_id はゲームセッション UUID（仕様 20.1）。
-// extra は domain 固有のキー（audit_event, connection_epoch 等）をマージする。
+
+
+
 func BuildEntry(
 	ts time.Time,
 	reqID, actionID, roomID string,
@@ -43,7 +43,7 @@ func BuildEntry(
 	return e
 }
 
-// Info は BuildEntry の JSON を 1 行で出力する。
+
 func Info(logger echo.Logger, entry map[string]any) {
 	b, err := json.Marshal(entry)
 	if err != nil {

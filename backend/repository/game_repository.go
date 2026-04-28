@@ -12,24 +12,24 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// pgStore は repository.Store の PostgreSQL（GORM）実装。
+
 type pgStore struct {
 	db *gorm.DB
 }
 
-// NewPostgreSQLStore は GORM 接続から Store を生成する。
+
 func NewPostgreSQLStore(g *gorm.DB) Store {
 	return &pgStore{db: g}
 }
 
-// Transaction は DB トランザクション内でコールバックを実行する。
+
 func (s *pgStore) Transaction(ctx context.Context, fn func(txStore Store) error) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		return fn(&pgStore{db: tx})
 	})
 }
 
-// mapErr は GORM / PostgreSQL エラーを ErrNotFound / ErrAlreadyExists 等に変換する。
+
 func mapErr(err error) error {
 	if err == nil {
 		return nil

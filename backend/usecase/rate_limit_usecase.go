@@ -9,7 +9,7 @@ import (
 	"blackjack/backend/repository"
 )
 
-// RateLimitUsecase は配信層から使うレート制御ユースケース。
+
 type RateLimitUsecase interface {
 	Allow(ctx context.Context, key string) (RateLimitResult, error)
 	AllowSignup(ctx context.Context, ip string, email string) (RateLimitDecision, error)

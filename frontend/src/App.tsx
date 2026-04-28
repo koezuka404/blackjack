@@ -84,33 +84,33 @@ export function isWsErrorEvent(payload: unknown): payload is WsErrorEvent {
 
 export function resolveApiBaseURL(): string {
   const raw = import.meta.env.VITE_API_BASE_URL
-  /* v8 ignore start */
+
   if (typeof raw === 'string' && raw.trim() !== '') {
-    /* c8 ignore next */
+
     return raw.trim()
   }
   if (typeof window !== 'undefined' && window.location?.origin) {
     return `${window.location.origin}/api`
   }
-  /* c8 ignore next */
+
   return 'http://localhost:8080/api'
-  /* v8 ignore stop */
+
 }
 
 export function resolveWsBaseURL(): string {
   const raw = import.meta.env.VITE_WS_BASE_URL
-  /* v8 ignore start */
+
   if (typeof raw === 'string' && raw.trim() !== '') {
-    /* c8 ignore next */
+
     return raw.trim()
   }
   if (typeof window !== 'undefined' && window.location) {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     return `${proto}//${window.location.host}/ws`
   }
-  /* c8 ignore next */
+
   return 'ws://localhost:8080/ws'
-  /* v8 ignore stop */
+
 }
 
 const API_BASE_URL = resolveApiBaseURL()
@@ -286,7 +286,7 @@ export function outcomeToLabel(outcome?: string | null): { text: string; tone: '
   }
 }
 
-/** サーバの turn_deadline からの残り ms 用。0 以下は時間切れ扱い。 */
+
 export function formatPlayerTurnCountdown(remainingMs: number): { text: string; urgent: boolean; isOver: boolean } {
   if (remainingMs <= 0) {
     return { text: '時間切れ', urgent: true, isOver: true }
@@ -302,8 +302,8 @@ export function formatPlayerTurnCountdown(remainingMs: number): { text: string; 
 }
 
 function App() {
-  const [username, setUsername] = useState('pm_user_01')
-  const [password, setPassword] = useState('password12')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
   const [token, setToken] = useState(localStorage.getItem(TOKEN_STORAGE_KEY) ?? '')
   const [roomID, setRoomID] = useState('')
   const [statusMessage, setStatusMessage] = useState('')
@@ -318,24 +318,26 @@ function App() {
   const [isInRoom, setIsInRoom] = useState(false)
   const [hasStartedCurrentRoom, setHasStartedCurrentRoom] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
-  /** ルーム入室中のみ WS を自動再接続する（退出・ログアウト時は false にする） */
+
   const maintainWsConnectionRef = useRef(false)
-  /** connectWebSocket が既存ソケットを差し替えるときの onclose は再接続しない */
+
   const silentWsReplaceCloseRef = useRef(false)
   const wsReconnectAttemptRef = useRef(0)
   const wsReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const wsReconnectDeadlineRef = useRef<number | null>(null)
   const wsReconnectDisplayIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const [wsReconnectRemainingSec, setWsReconnectRemainingSec] = useState<number | null>(null)
-  /** null でなくれば切断後に自動再接続が予約されている（秒数と別に表示を保証する） */
+  const [wsReconnectRemainingSec, setWsReconnectRemainingSec] = useState(0)
+
   const [wsReconnectBannerVisible, setWsReconnectBannerVisible] = useState(false)
   const [turnClockNowMs, setTurnClockNowMs] = useState(() => Date.now())
   const tokenRef = useRef(token)
   const roomIDRef = useRef(roomID)
   const isInRoomRef = useRef(isInRoom)
-  tokenRef.current = token
-  roomIDRef.current = roomID
-  isInRoomRef.current = isInRoom
+  useEffect(() => {
+    tokenRef.current = token
+    roomIDRef.current = roomID
+    isInRoomRef.current = isInRoom
+  }, [token, roomID, isInRoom])
 
   const authClient = useMemo(() => {
     const client = axios.create({
@@ -345,7 +347,7 @@ function App() {
       },
     })
     client.interceptors.request.use((config) => {
-      /* c8 ignore next 3 */
+
       if (token) {
         config.headers.Authorization = `Bearer ${token}`
       }
@@ -359,16 +361,19 @@ function App() {
   }
 
   const clearReconnectCountdown = () => {
+
     wsReconnectDeadlineRef.current = null
     if (wsReconnectDisplayIntervalRef.current) {
       clearInterval(wsReconnectDisplayIntervalRef.current)
       wsReconnectDisplayIntervalRef.current = null
     }
-    setWsReconnectRemainingSec(null)
+    setWsReconnectRemainingSec(0)
     setWsReconnectBannerVisible(false)
+
   }
 
   const startReconnectCountdown = (delayMs: number) => {
+
     if (wsReconnectDisplayIntervalRef.current) {
       clearInterval(wsReconnectDisplayIntervalRef.current)
       wsReconnectDisplayIntervalRef.current = null
@@ -393,6 +398,7 @@ function App() {
     }
     tick()
     wsReconnectDisplayIntervalRef.current = window.setInterval(tick, 250)
+
   }
 
   const saveToken = (nextToken: string) => {
@@ -427,7 +433,7 @@ function App() {
         username,
         password,
       })
-      /* c8 ignore next */
+
       saveToken(unwrapData(response.data).access_token)
     })
   }
@@ -449,18 +455,18 @@ function App() {
       setHistoryJSON('')
       setWsLog([])
       wsReconnectAttemptRef.current = 0
-      /* v8 ignore start */
+
       if (wsReconnectTimerRef.current) {
         clearTimeout(wsReconnectTimerRef.current)
         wsReconnectTimerRef.current = null
       }
       clearReconnectCountdown()
       if (wsRef.current) {
-        /* c8 ignore next 2 */
+
         wsRef.current.close()
         wsRef.current = null
       }
-      /* v8 ignore stop */
+
     })
   }
 
@@ -482,13 +488,13 @@ function App() {
   }
 
   const joinRoom = async () => {
-    /* v8 ignore start */
+
     if (!token) {
-      /* c8 ignore next 2 */
+
       setStatusMessage('先にログインしてください')
       return
     }
-    /* v8 ignore stop */
+
     const rid = roomID.trim()
     if (!rid) {
       setStatusMessage('ルームIDを入力してください')
@@ -509,13 +515,13 @@ function App() {
   }
 
   const startRoom = async () => {
-    /* v8 ignore start */
+
     if (!token) {
-      /* c8 ignore next 2 */
+
       setStatusMessage('先にログインしてください')
       return
     }
-    /* v8 ignore stop */
+
     const rid = roomID.trim()
     if (!rid) {
       setStatusMessage('ルームIDを入力してください')
@@ -581,7 +587,7 @@ function App() {
       setStatusMessage('接続失敗: ルームIDが空です')
       return
     }
-    /* v8 ignore start */
+
     if (!nextToken) {
       setStatusMessage('接続失敗: 先にログインしてください')
       return
@@ -592,11 +598,13 @@ function App() {
       wsRef.current.close()
       wsRef.current = null
     }
-    /* v8 ignore stop */
+
+
     if (wsReconnectTimerRef.current) {
       clearTimeout(wsReconnectTimerRef.current)
       wsReconnectTimerRef.current = null
     }
+
     const url = `${WS_BASE_URL}/rooms/${resolvedRoomID}`
     const socket = new WebSocket(url)
     wsRef.current = socket
@@ -615,7 +623,7 @@ function App() {
         }),
       )
       appendWSLog('認証メッセージ送信')
-      // 認証直後に同期要求を投げ、初期表示の体感待ちを減らす。
+
       setTimeout(() => {
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(
@@ -640,7 +648,7 @@ function App() {
           appendWSLog(`WSエラー応答: ${parsed.error.code}`)
         }
       } catch {
-        // no-op
+        appendWSLog('WSメッセージのJSON解析に失敗')
       }
     }
 
@@ -649,14 +657,14 @@ function App() {
     }
 
     socket.onclose = () => {
-      /* c8 ignore start */
+
       if (silentWsReplaceCloseRef.current) {
         silentWsReplaceCloseRef.current = false
         return
       }
       setWsConnectionState('disconnected')
       appendWSLog('WS切断')
-      /* v8 ignore next 3 — leave で ws を閉じる直前に ref で false にしている */
+
       if (!maintainWsConnectionRef.current || !isInRoomRef.current) {
         return
       }
@@ -679,16 +687,18 @@ function App() {
         }
         connectWebSocket(tokenRef.current)
       }, delayMs)
-      /* c8 ignore stop */
+
     }
   }
 
   useEffect(() => {
     return () => {
+
       if (wsReconnectTimerRef.current) {
         clearTimeout(wsReconnectTimerRef.current)
         wsReconnectTimerRef.current = null
       }
+
       clearReconnectCountdown()
     }
   }, [])
@@ -697,6 +707,7 @@ function App() {
     if (wsConnectionState !== 'connected') {
       return
     }
+
     const intervalId = window.setInterval(() => {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
         return
@@ -710,6 +721,7 @@ function App() {
     return () => {
       window.clearInterval(intervalId)
     }
+
   }, [wsConnectionState])
 
   const turnDeadlineRaw = roomState?.session.turn_deadline_at
@@ -728,39 +740,41 @@ function App() {
     if (!showTurnTimer && !showRematchAutoEndTimer) {
       return
     }
+
     const intervalId = window.setInterval(() => {
       setTurnClockNowMs(Date.now())
     }, 250)
     return () => {
       window.clearInterval(intervalId)
     }
+
   }, [showTurnTimer, showRematchAutoEndTimer, turnDeadlineRaw, rematchDeadlineRaw])
 
   const turnCountdownView = showTurnTimer
     ? formatPlayerTurnCountdown(turnDeadlineMs - turnClockNowMs)
     : { text: '', urgent: false, isOver: false }
-  const rematchAutoEndSec = showRematchAutoEndTimer ? Math.max(0, Math.ceil((rematchDeadlineMs - turnClockNowMs) / 1000)) : null
+  const rematchAutoEndSec = Math.max(0, Math.ceil((rematchDeadlineMs - turnClockNowMs) / 1000))
 
   const sendWSMessage = (payload: Record<string, unknown>) => {
-    /* v8 ignore start */
+
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       return
     }
-    /* v8 ignore stop */
+
     const body = JSON.stringify(payload)
     wsRef.current.send(body)
     appendWSLog(`=> ${body}`)
   }
 
   const joinRoomFlow = async () => {
-    /* v8 ignore start */
+
     if (!token) {
-      /* c8 ignore next 2 */
+
       setStatusMessage('先にログインしてください')
       return
     }
-    /* v8 ignore stop */
-    // 再入室時は開始ロックを先に解除しておく。
+
+
     setHasStartedCurrentRoom(false)
     setIsJoiningRoom(true)
     await withStatus('ルーム参加', async () => {
@@ -772,7 +786,7 @@ function App() {
         setRoomID(targetRoomID)
         setRooms((prev) => [
           createdRoom,
-          /* v8 ignore next */
+
           ...prev.filter((room) => room.id !== targetRoomID),
         ])
       }
@@ -790,23 +804,23 @@ function App() {
   }
 
   const leaveRoomFlow = async () => {
-    /* v8 ignore start */
+
     if (!token) {
-      /* c8 ignore next 2 */
+
       setStatusMessage('先にログインしてください')
       return
     }
     if (!roomID.trim()) {
-      /* c8 ignore next 2 */
+
       setStatusMessage('先にルームに入ってください')
       return
     }
     if (roomState?.session.id) {
-      /* c8 ignore next 2 */
+
       setStatusMessage('対局中はルーム退出できません')
       return
     }
-    /* v8 ignore stop */
+
     await withStatus('ルーム退出', async () => {
       await authClient.post<ApiResponse<{ room: RoomSummary }>>(`/rooms/${roomID}/leave`, {})
       maintainWsConnectionRef.current = false
@@ -815,35 +829,35 @@ function App() {
       setHasStartedCurrentRoom(false)
       setRoomState(null)
       wsReconnectAttemptRef.current = 0
-      /* v8 ignore start */
+
       if (wsReconnectTimerRef.current) {
         clearTimeout(wsReconnectTimerRef.current)
         wsReconnectTimerRef.current = null
       }
       clearReconnectCountdown()
       if (wsRef.current) {
-        /* c8 ignore next 2 */
+
         wsRef.current.close()
         wsRef.current = null
       }
-      /* v8 ignore stop */
+
       setWsConnectionState('disconnected')
     })
   }
 
   const startGameFlow = async () => {
-    /* v8 ignore start */
+
     if (!token) {
-      /* c8 ignore next 2 */
+
       setStatusMessage('先にログインしてください')
       return
     }
     if (!roomID.trim()) {
-      /* c8 ignore next 2 */
+
       setStatusMessage('先にルームIDを指定してルームに入ってください')
       return
     }
-    /* v8 ignore stop */
+
     setIsStartingGame(true)
     await withStatus('ゲーム開始', async () => {
       await authClient.post<ApiResponse<{ session: { version: number } }>>(`/rooms/${roomID}/start`, {})
@@ -909,7 +923,7 @@ function App() {
       {wsReconnectBannerVisible && (
         <p className="ws-reconnect-countdown" role="status" aria-live="polite">
           WebSocketが切断されました。自動再接続まで
-          {wsReconnectRemainingSec === null ? '…' : ` あと ${wsReconnectRemainingSec} 秒`}
+          {` あと ${wsReconnectRemainingSec} 秒`}
         </p>
       )}
 
@@ -918,8 +932,8 @@ function App() {
           <section className="panel panel-table">
         <div className="game-notice-top" aria-live="polite">
           {showRematchAutoEndTimer && (
-            <div className={`rematch-auto-end-timer ${rematchAutoEndSec !== null && rematchAutoEndSec <= 5 ? 'rematch-auto-end-timer-urgent' : ''}`}>
-              あと {rematchAutoEndSec ?? 0} 秒で自動的にこのゲームを終了します
+          <div className={`rematch-auto-end-timer ${rematchAutoEndSec <= 5 ? 'rematch-auto-end-timer-urgent' : ''}`}>
+            あと {rematchAutoEndSec} 秒で自動的にこのゲームを終了します
             </div>
           )}
           {outcomeView.tone !== 'idle' && <div className={`result-banner result-${outcomeView.tone}`}>{outcomeView.text}</div>}
@@ -928,15 +942,15 @@ function App() {
           <button onClick={joinRoomFlow} className="btn-join-room" disabled={isJoiningRoom || isInRoom}>
             {isJoiningRoom ? '参加中…' : 'AIと対戦する'}
           </button>
-          <button onClick={leaveRoomFlow} className="btn-leave-room" disabled={!isInRoom || Boolean(roomState?.session.id)}>
-            ルーム退出
-          </button>
           <button
             onClick={startGameFlow}
             className="btn-start-game"
             disabled={isStartingGame || hasStartedCurrentRoom || !roomID.trim()}
           >
             {isStartingGame ? '開始中…' : hasStartedCurrentRoom ? '開始済み' : 'ゲーム開始'}
+          </button>
+          <button onClick={leaveRoomFlow} className="btn-leave-room" disabled={!isInRoom || Boolean(roomState?.session.id)}>
+            ルーム退出
           </button>
           <button onClick={() => connectWebSocket()} disabled={!roomID || !token}>
             再接続

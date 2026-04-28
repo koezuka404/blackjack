@@ -1,6 +1,6 @@
-// Package observability は Prometheus メトリクスを提供する（仕様 20 章）。
-// 20.2 相当の deploy_success_count / deploy_failure_count は CI・デプロイ基盤側で計測する想定のためアプリには含めない。
-// 20.3 のアラートは Alertmanager 等のルール定義で本メトリクスを参照する。
+
+
+
 package observability
 
 import (
