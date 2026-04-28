@@ -1,0 +1,290 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-unit:
+    name: Backend Unit & Vet
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Vet and unit tests
+        working-directory: backend
+        run: |
+          go vet ./...
+          go test ./... -count=1 -short -timeout 12m
+
+  backend-integration:
+    name: Backend Integration
+    needs: backend-unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: chatapp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d chatapp"
+          --health-interval 3s
+          --health-timeout 5s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Prepare dedicated databases for integration packages
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d postgres -c "CREATE DATABASE chatapp_repo_int;"
+          psql -h localhost -U postgres -d postgres -c "CREATE DATABASE chatapp_usecase_int;"
+          psql -h localhost -U postgres -d postgres -c "CREATE DATABASE chatapp_e2e_int;"
+      - name: Repository integration tests
+        working-directory: backend
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/chatapp_repo_int?sslmode=disable
+        run: go test -tags=integration ./repository -count=1 -timeout 20m
+      - name: Usecase integration tests
+        working-directory: backend
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/chatapp_usecase_int?sslmode=disable
+        run: go test -tags=integration ./usecase -count=1 -timeout 20m
+      - name: E2E integration tests
+        working-directory: backend
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/chatapp_e2e_int?sslmode=disable
+        run: go test -tags=integration ./e2e -count=1 -timeout 20m
+
+  backend-message-contract:
+    name: Message Event Contract
+    needs: backend-unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: chatapp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d chatapp"
+          --health-interval 3s
+          --health-timeout 5s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Message usecase contract tests
+        working-directory: backend
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/chatapp?sslmode=disable
+        run: go test ./usecase -tags=integration -run "TestMessageUseCase_Events_" -count=1 -timeout 10m
+
+  frontend:
+    name: Frontend Lint & Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Lint and build
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+
+  e2e-playwright:
+    name: Frontend/Backend E2E
+    needs: [backend-unit, frontend]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: chatapp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d chatapp"
+          --health-interval 3s
+          --health-timeout 5s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install Playwright browser
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install chromium --with-deps
+      - name: Playwright E2E
+        working-directory: frontend
+        env:
+          CI: "true"
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/chatapp?sslmode=disable
+        run: npm run test:e2e
+      - name: Upload Playwright artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts
+          path: |
+            frontend/test-results
+            frontend/playwright-report
+          if-no-files-found: ignore
+
+  k6-spec:
+    name: k6 API Spec Load
+    needs: [backend-integration, backend-message-contract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: chatapp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d chatapp"
+          --health-interval 3s
+          --health-timeout 5s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Start API for k6
+        working-directory: backend
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/chatapp?sslmode=disable
+          REDIS_ADDR: ""
+          JWT_SECRET: ci-k6-jwt-secret-must-be-32-bytes-min!!
+          PORT: "8080"
+        run: |
+          nohup go run . > /tmp/k6-api.log 2>&1 &
+          echo $! > /tmp/k6-api.pid
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:8080/health | grep -q ok; then
+              echo "API ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/k6-api.log || true
+          exit 1
+      - name: "k6（単一シナリオ: health〜送信・既読）"
+        run: |
+          docker run --rm --network=host \
+            -v "${GITHUB_WORKSPACE}/k6:/k6:ro" \
+            -e K6_API_BASE_URL=http://127.0.0.1:8080 \
+            -e K6_VUS=3 \
+            -e K6_DURATION=25s \
+            grafana/k6:0.55.0 run /k6/scenarios/spec_api.js
+      - name: Stop API
+        if: always()
+        run: |
+          if [ -f /tmp/k6-api.pid ]; then kill $(cat /tmp/k6-api.pid) 2>/dev/null || true; fi
+
+  publish-images:
+    name: Publish Docker Images (main/master)
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    needs: [backend-integration, backend-message-contract, frontend, e2e-playwright, k6-spec]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Backend Docker metadata
+        id: meta_backend
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/backend
+          tags: |
+            type=sha,prefix=main-
+            type=raw,value=latest
+      - name: Frontend Docker metadata
+        id: meta_frontend
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/frontend
+          tags: |
+            type=sha,prefix=main-
+            type=raw,value=latest
+      - name: Build and push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: backend-runtime
+          push: true
+          tags: ${{ steps.meta_backend.outputs.tags }}
+          labels: ${{ steps.meta_backend.outputs.labels }}
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: frontend-runtime
+          push: true
+          tags: ${{ steps.meta_frontend.outputs.tags }}
+          labels: ${{ steps.meta_frontend.outputs.labels }}
