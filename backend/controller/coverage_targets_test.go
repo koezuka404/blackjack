@@ -94,7 +94,7 @@ func TestTargetCoverage_ResetRoomDebug_StartRoom_TurnAction_GetRoom(t *testing.T
 			t.Fatalf("start success got=%d", recOK.Code)
 		}
 
-		// explicit checks to guarantee all switch branches are executed
+
 		branchErrs := []error{
 			usecase.ErrUnauthorizedUser,
 			usecase.ErrForbiddenAction,
@@ -279,7 +279,7 @@ func TestTargetCoverage_BroadcastRoomStateLocal(t *testing.T) {
 	_ = client.SetReadDeadline(time.Now().Add(time.Second))
 	_, _, _ = client.ReadMessage()
 
-	// write error branch: close peer then broadcast again
+
 	_ = client.Close()
 	time.Sleep(20 * time.Millisecond)
 	ctrl.broadcastRoomStateLocal(context.Background(), "r1", "u1", dto.WSEventRoomSync)

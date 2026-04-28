@@ -218,6 +218,7 @@ button:disabled {
   flex-wrap: wrap;
   gap: 8px;
   justify-content: center;
+  perspective: 900px;
 }
 
 .playing-card {
@@ -227,6 +228,12 @@ button:disabled {
   border: 1px solid #d1d5db;
   background: #ffffff;
   position: relative;
+}
+
+.playing-card:not(.card-back) {
+  animation: card-flip-reveal 560ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  transform-origin: center center;
+  backface-visibility: hidden;
 }
 
 .card-corner {
@@ -267,6 +274,18 @@ button:disabled {
 .card-back {
   background: #2563eb;
   color: #ffffff;
+}
+
+@keyframes card-flip-reveal {
+  0% {
+    transform: rotateY(160deg) translateY(2px);
+  }
+  70% {
+    transform: rotateY(-4deg) translateY(0);
+  }
+  100% {
+    transform: rotateY(0deg) translateY(0);
+  }
 }
 
 .hand-cards-empty {

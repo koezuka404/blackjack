@@ -34,7 +34,7 @@ func TestBuildEntryAndInfo(t *testing.T) {
 		t.Fatalf("extra field missing: %#v", entry)
 	}
 
-	// Smoke test: no panic and marshal succeeds.
+
 	e := echo.New()
 	Info(e.Logger, entry)
 	Info(e.Logger, map[string]any{

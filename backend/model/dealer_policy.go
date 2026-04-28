@@ -15,13 +15,13 @@ type HandEvaluator interface {
 }
 
 func NextDealerAction(ev HandEvaluator, dealer []StoredCard) (action DealerAction, terminal bool) {
-	// terminal=true は「これ以上ディーラーが引かない」ことを示す。
+
 	if ev.IsBust(dealer) {
 		return DealerActionStand, true
 	}
 
 	v := ev.Value(dealer)
-	// 仕様上は Soft17 でも Stand（S17）。
+
 	if v == 17 && ev.IsSoft(dealer) {
 		return DealerActionStand, false
 	}

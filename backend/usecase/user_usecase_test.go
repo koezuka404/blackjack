@@ -76,7 +76,7 @@ func (s *authStoreStub) Transaction(ctx context.Context, fn func(txStore reposit
 	return fn(s)
 }
 
-// Unused Store methods (not needed for auth usecase tests).
+
 func (s *authStoreStub) UpdateRoom(ctx context.Context, room *model.Room) error {
 	if s.updateRoomFn != nil {
 		return s.updateRoomFn(ctx, room)

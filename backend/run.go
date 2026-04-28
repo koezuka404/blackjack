@@ -25,7 +25,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// 以下はテストで差し替え可能（既定は本番相当の実装）。
+
 var (
 	dbOpenFn = db.Open
 	newRedisClientFn = func(addr string) *redis.Client {

@@ -16,7 +16,7 @@ import (
 func (r *RoomController) handleGameWSAction(ws *WsAuditLogContext, req dto.WSActionRequest, roomID, userID string, conn *websocket.Conn, meta wsConnMeta, msgStart time.Time) {
 	switch req.Type {
 	case dto.WSEventHit:
-		// 更新系: action_id + expected_version
+
 		if req.ActionID == "" || req.ExpectedVersion <= 0 {
 			sendWSError(conn, meta, dto.WSErrorInvalidInput, "action_id and expected_version are required")
 			return
@@ -34,7 +34,7 @@ func (r *RoomController) handleGameWSAction(ws *WsAuditLogContext, req dto.WSAct
 		logWSEvent(ws, req, roomID, userID, &gid, &ev, &sv, msgStart, "success", "", nil)
 		r.broadcastRoomState(context.Background(), roomID, userID, dto.WSEventRoomSync)
 	case dto.WSEventStand:
-		// 更新系: STAND も HIT と同じ検証・整合性フローで処理する
+
 		if req.ActionID == "" || req.ExpectedVersion <= 0 {
 			sendWSError(conn, meta, dto.WSErrorInvalidInput, "action_id and expected_version are required")
 			return
@@ -52,7 +52,7 @@ func (r *RoomController) handleGameWSAction(ws *WsAuditLogContext, req dto.WSAct
 		logWSEvent(ws, req, roomID, userID, &gid, &ev, &sv, msgStart, "success", "", nil)
 		r.broadcastRoomState(context.Background(), roomID, userID, dto.WSEventRoomSync)
 	case dto.WSEventRematchVote:
-		// 再戦投票は WS のみ受け付ける（HTTP fallback なし）
+
 		if req.ActionID == "" || req.ExpectedVersion <= 0 || req.Agree == nil {
 			sendWSError(conn, meta, dto.WSErrorInvalidInput, "agree, action_id and expected_version are required")
 			return
@@ -70,11 +70,11 @@ func (r *RoomController) handleGameWSAction(ws *WsAuditLogContext, req dto.WSAct
 		logWSEvent(ws, req, roomID, userID, &gid, &ev, &sv, msgStart, "success", "", nil)
 		r.broadcastRoomState(context.Background(), roomID, userID, dto.WSEventRoomSync)
 	case dto.WSEventRoomSyncReq:
-		// 読み取り系同期要求は version 不一致をエラーにせず、正本を再送する
+
 		logWSEvent(ws, req, roomID, userID, nil, nil, nil, msgStart, "success", "", nil)
 		r.broadcastRoomState(context.Background(), roomID, userID, dto.WSEventRoomSync)
 	case dto.WSEventPing:
-		// 接続が生きているか確認
+
 		logWSEvent(ws, req, roomID, userID, nil, nil, nil, msgStart, "success", "", nil)
 		sendWSPong(conn, meta)
 	default:
@@ -83,7 +83,7 @@ func (r *RoomController) handleGameWSAction(ws *WsAuditLogContext, req dto.WSAct
 	}
 }
 
-// mapWSError はドメインエラーを WS の code/message に変換する。
+
 func mapWSError(err error) (string, string) {
 	switch err {
 	case usecase.ErrUnauthorizedUser:

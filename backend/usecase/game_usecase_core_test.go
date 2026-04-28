@@ -234,13 +234,13 @@ func TestRoomUsecase_GetRoomAndListRooms(t *testing.T) {
 		t.Fatalf("expected invalid input, got %v", err)
 	}
 
-	// Non-host + no membership should be forbidden.
+
 	st.getRoomPlayerFn = func(context.Context, string, string) (*model.RoomPlayer, error) { return nil, repository.ErrNotFound }
 	if _, _, err := uc.GetRoom(context.Background(), "r1", "u2"); !errors.Is(err, ErrForbiddenAction) {
 		t.Fatalf("expected forbidden, got %v", err)
 	}
 
-	// Session pointer exists, but missing session row is tolerated.
+
 	sid := "s1"
 	roomWithSession := &model.Room{ID: "r1", HostUserID: "u1", Status: model.RoomStatusPlaying, CurrentSessionID: &sid, CreatedAt: now, UpdatedAt: now}
 	st2 := &authStoreStub{
@@ -267,7 +267,7 @@ func TestRoomUsecase_GetRoomAndListRooms(t *testing.T) {
 		t.Fatalf("unexpected list result: rooms=%d err=%v", len(rooms), err)
 	}
 
-	// Non-host member with LEFT status should be forbidden.
+
 	st.getRoomPlayerFn = func(context.Context, string, string) (*model.RoomPlayer, error) {
 		return &model.RoomPlayer{RoomID: "r1", UserID: "u2", SeatNo: 1, Status: model.RoomPlayerLeft, JoinedAt: now}, nil
 	}
@@ -275,7 +275,7 @@ func TestRoomUsecase_GetRoomAndListRooms(t *testing.T) {
 		t.Fatalf("expected forbidden for left membership, got %v", err)
 	}
 
-	// Non-host active membership can read room.
+
 	st.getRoomPlayerFn = func(context.Context, string, string) (*model.RoomPlayer, error) {
 		return &model.RoomPlayer{RoomID: "r1", UserID: "u2", SeatNo: 1, Status: model.RoomPlayerActive, JoinedAt: now}, nil
 	}
@@ -600,7 +600,7 @@ func TestRoomUsecase_Hit_BustAndReplay(t *testing.T) {
 		t.Fatalf("unexpected hit state: updated=%v sessStatus=%s playerStatus=%s version=%d", updated, outSess.Status, playerState.Status, outSess.Version)
 	}
 
-	// Replay with same action_id/payload should short-circuit without DB updates.
+
 	updated = false
 	sess.Version = 2
 	sess.Status = model.SessionStatusPlayerTurn

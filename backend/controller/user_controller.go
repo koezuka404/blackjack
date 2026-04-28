@@ -20,12 +20,12 @@ type loginRequest struct {
 	Password string `json:"password"`
 }
 
-// NewAuthController は認証 API ハンドラを生成する。
+
 func NewAuthController(auth usecase.AuthUsecase) *AuthController {
 	return &AuthController{auth: auth}
 }
 
-// Register は /api 配下に認証ルートを登録する。
+
 func (a *AuthController) Register(g *echo.Group) {
 	g.POST("/auth/signup", a.Signup)
 	g.POST("/auth/login", a.Login)
@@ -33,7 +33,7 @@ func (a *AuthController) Register(g *echo.Group) {
 	g.GET("/me", a.Me)
 }
 
-// Signup は新規登録し JWT を返す。
+
 func (a *AuthController) Signup(c echo.Context) error {
 	var req loginRequest
 	if err := c.Bind(&req); err != nil || req.Username == "" || req.Password == "" {
@@ -61,7 +61,7 @@ func (a *AuthController) Signup(c echo.Context) error {
 	}))
 }
 
-// Login はログインし JWT を返す。
+
 func (a *AuthController) Login(c echo.Context) error {
 	var req loginRequest
 	if err := c.Bind(&req); err != nil || req.Username == "" || req.Password == "" {
@@ -85,13 +85,13 @@ func (a *AuthController) Login(c echo.Context) error {
 	}))
 }
 
-// Logout はクライアント側トークン破棄用の成功応答（サーバーはステートレスで無効化しない）。
+
 func (a *AuthController) Logout(c echo.Context) error {
 	_ = a.auth.Logout(c.Request().Context())
 	return c.JSON(http.StatusOK, dto.OK(map[string]any{}))
 }
 
-// Me は JWT から解決した現在ユーザーを返す。
+
 func (a *AuthController) Me(c echo.Context) error {
 	userID, _ := c.Get("user_id").(string)
 	if userID == "" {

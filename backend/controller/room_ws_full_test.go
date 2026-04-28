@@ -150,16 +150,16 @@ func TestRoomWS_SuccessAndMessageLoopBranches(t *testing.T) {
 	_ = c.SetReadDeadline(time.Now().Add(time.Second))
 	_, _, _ = c.ReadMessage()
 
-	// invalid json branch
+
 	_ = c.WriteMessage(websocket.TextMessage, []byte("{"))
 	_, _, _ = c.ReadMessage()
 
-	// action branch with usecase error
+
 	hit, _ := json.Marshal(dto.WSActionRequest{Type: dto.WSEventHit, ActionID: "a1", ExpectedVersion: 1})
 	_ = c.WriteMessage(websocket.TextMessage, hit)
 	_, _, _ = c.ReadMessage()
 
-	// stale epoch branch
+
 	_ = rdb.Set(context.Background(), wsEpochLatestKey("r1", "u1"), int64(999), time.Minute).Err()
 	ping, _ := json.Marshal(dto.WSActionRequest{Type: dto.WSEventPing})
 	_ = c.WriteMessage(websocket.TextMessage, ping)
@@ -207,9 +207,9 @@ func TestRoomWS_MessageLoopRateLimitAndEpochErrors(t *testing.T) {
 	_, _, _ = c.ReadMessage()
 
 	msg, _ := json.Marshal(dto.WSActionRequest{Type: dto.WSEventPing})
-	_ = c.WriteMessage(websocket.TextMessage, msg) // limiter error
+	_ = c.WriteMessage(websocket.TextMessage, msg)
 	_, _, _ = c.ReadMessage()
-	_ = c.WriteMessage(websocket.TextMessage, msg) // limiter not allowed
+	_ = c.WriteMessage(websocket.TextMessage, msg)
 	_, _, _ = c.ReadMessage()
 }
 
@@ -326,7 +326,7 @@ func TestRoomWS_AdditionalErrorBranches(t *testing.T) {
 		setCall := 0
 		wsEpochSetFn = func(ctx context.Context, rdb *redis.Client, key string, value any, ttl time.Duration) error {
 			setCall++
-			// first Set is register epoch; second Set is refresh during loop
+
 			if setCall >= 2 {
 				return context.DeadlineExceeded
 			}
@@ -352,7 +352,7 @@ func TestRoomWS_AdditionalErrorBranches(t *testing.T) {
 		_ = c1.SetReadDeadline(time.Now().Add(time.Second))
 		_, _, _ = c1.ReadMessage()
 
-		// connect second socket same user to hit old!=nil branch
+
 		wsEpochSetFn = prevSet
 		c2 := dialWS(t, url)
 		defer c2.Close()
@@ -360,27 +360,27 @@ func TestRoomWS_AdditionalErrorBranches(t *testing.T) {
 		_ = c2.SetReadDeadline(time.Now().Add(time.Second))
 		_, _, _ = c2.ReadMessage()
 
-		// refresh error branch in loop
+
 		wsEpochSetFn = func(context.Context, *redis.Client, string, any, time.Duration) error { return context.DeadlineExceeded }
 		ping, _ := json.Marshal(dto.WSActionRequest{Type: dto.WSEventPing})
 		_ = c2.WriteMessage(websocket.TextMessage, ping)
 		_, _, _ = c2.ReadMessage()
 
-		// isCurrent err branch
+
 		wsEpochSetFn = prevSet
 		wsEpochGetInt64Fn = func(context.Context, *redis.Client, string) (int64, error) { return 0, context.DeadlineExceeded }
 		_ = c2.WriteMessage(websocket.TextMessage, ping)
 		_, _, _ = c2.ReadMessage()
 
-		// !isCurrent branch
+
 		wsEpochGetInt64Fn = func(context.Context, *redis.Client, string) (int64, error) { return 999, nil }
 		_ = c2.WriteMessage(websocket.TextMessage, ping)
 		_, _, _ = c2.ReadMessage()
 	})
 }
 
-// RoomWS の切断時 defer で isCurrentConnectionEpoch が Redis エラーを返した場合、
-// 誤切断を避けるため epoch 一致とみなして MarkDisconnected を試みる分岐を通す。
+
+
 func TestRoomWS_DeferEpochRedisErrorTreatsAsCurrent(t *testing.T) {
 	globalRoomHub = &roomHub{rooms: map[string]map[*websocket.Conn]wsConnMeta{}, latest: map[string]*websocket.Conn{}}
 	ConfigureWebSocketAllowedOrigins(nil)

@@ -14,7 +14,7 @@ var signTokenFn = func(t *jwt.Token, secret []byte) (string, error) {
 	return t.SignedString(secret)
 }
 
-// SignAccessToken は HS256 のアクセストークンを発行する。返す jti は監査ログの session_id 相当に使う。
+
 func SignAccessToken(secret []byte, userID string, ttl time.Duration) (token string, expiresAt time.Time, jti string, err error) {
 	if len(secret) < 16 {
 		return "", time.Time{}, "", fmt.Errorf("jwt secret must be at least 16 bytes")
@@ -36,7 +36,7 @@ func SignAccessToken(secret []byte, userID string, ttl time.Duration) (token str
 	return signed, expiresAt, jti, nil
 }
 
-// ParseAndValidate は Bearer 用トークンを検証し user_id（sub）と jti を返す。
+
 func ParseAndValidate(secret []byte, tokenString string) (userID, jti string, err error) {
 	if len(secret) < 16 {
 		return "", "", fmt.Errorf("jwt secret must be at least 16 bytes")

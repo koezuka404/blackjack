@@ -6,10 +6,10 @@ import (
 	"github.com/ethanefung/cards"
 )
 
-// libRoundEngine は github.com/ethanefung/blackjack の Hand（[]cards.Card）へ変換して Draw し、正本の StoredCard 列へ戻す。
+
 type libRoundEngine struct{}
 
-// NewRoundEngine は RoundEngine のデフォルト実装を返す。
+
 func NewRoundEngine() model.RoundEngine {
 	return &libRoundEngine{}
 }

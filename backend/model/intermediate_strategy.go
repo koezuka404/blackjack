@@ -1,12 +1,12 @@
 package model
 
-// RecommendHitOrStand はディーラーアップカードを見た HIT/STAND 推奨（中級者向けヒューリスティック）。
-// 前提: S17、ダブル/スプリット/サレンダーなし。
+
+
 func RecommendHitOrStand(ev HandEvaluator, player []StoredCard, dealerUp StoredCard) bool {
 	if len(player) == 0 || ev.IsBust(player) {
 		return false
 	}
-	// ディーラーの見えている1枚（アップカード）だけを使って判断する。
+
 	dv := dealerUpValue(dealerUp)
 	if ev.IsSoft(player) {
 		return softHitOrStand(ev, player, dv)
@@ -47,7 +47,7 @@ func softHitOrStand(ev HandEvaluator, player []StoredCard, dealerValue int) bool
 		return false
 	}
 	if v == 18 {
-		// ソフト18は相手が強いアップカード（9/10/A）ならヒット寄り。
+
 		return dealerValue >= 9 || dealerValue == 11
 	}
 	return true
@@ -65,7 +65,7 @@ func hardHitOrStand(ev HandEvaluator, player []StoredCard, dealerValue int) bool
 	case v == 11:
 		return true
 	case v == 10:
-		// ダブルが無い前提なので 10 の境界だけ簡略ルールで扱う。
+
 		return dealerValue >= 10 || dealerValue == 11
 	default:
 		return true

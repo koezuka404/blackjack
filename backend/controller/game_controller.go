@@ -15,7 +15,7 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// GetPlayHint は中級者向けヒューリスティックによる HIT/STAND 推奨（プレイヤーターン・操作可能時のみ）。
+
 func (r *RoomController) GetPlayHint(c echo.Context) error {
 	userID, _ := c.Get("user_id").(string)
 	roomID := c.Param("id")
@@ -43,7 +43,7 @@ func (r *RoomController) GetPlayHint(c echo.Context) error {
 	}))
 }
 
-// GetRoomHistory は round_logs 由来の履歴取得。
+
 func (r *RoomController) GetRoomHistory(c echo.Context) error {
 	userID, _ := c.Get("user_id").(string)
 	roomID := c.Param("id")
@@ -72,7 +72,7 @@ func (r *RoomController) GetRoomHistory(c echo.Context) error {
 	}))
 }
 
-// StartRoom はゲーム開始（配札）。
+
 func (r *RoomController) StartRoom(c echo.Context) error {
 	userID, _ := c.Get("user_id").(string)
 	roomID := c.Param("id")
@@ -104,17 +104,17 @@ func (r *RoomController) StartRoom(c echo.Context) error {
 	}))
 }
 
-// Hit は HTTP 経由のヒット（WS と二重になる場合はクライアント方針次第）。
+
 func (r *RoomController) Hit(c echo.Context) error {
 	return r.turnAction(c, true)
 }
 
-// Stand は HTTP 経由のスタンド。
+
 func (r *RoomController) Stand(c echo.Context) error {
 	return r.turnAction(c, false)
 }
 
-// ResetRoomDebug は開発専用の卓リセット（§15.3）。BLACKJACK_DEBUG_ROOM_RESET=true のときのみ有効。
+
 func (r *RoomController) ResetRoomDebug(c echo.Context) error {
 	if os.Getenv("BLACKJACK_DEBUG_ROOM_RESET") != "true" {
 		return c.JSON(http.StatusForbidden, dto.Fail("debug_disabled", "room reset is disabled"))
@@ -142,7 +142,7 @@ func (r *RoomController) ResetRoomDebug(c echo.Context) error {
 	}))
 }
 
-// RematchVote は再戦投票処理本体。仕様 §12.2 により HTTP ルートには公開せず、WS REMATCH_VOTE から利用する。
+
 func (r *RoomController) RematchVote(c echo.Context) error {
 	userID, _ := c.Get("user_id").(string)
 	roomID := c.Param("id")
@@ -167,7 +167,7 @@ func (r *RoomController) RematchVote(c echo.Context) error {
 	}))
 }
 
-// turnAction は Hit/Stand 共通の HTTP 処理とブロードキャスト。
+
 func (r *RoomController) turnAction(c echo.Context, hit bool) error {
 	userID, _ := c.Get("user_id").(string)
 	roomID := c.Param("id")

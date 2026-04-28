@@ -1,0 +1,14 @@
+mode: set
+blackjack/backend/observability/metrics.go:83.87,87.2 3 1
+blackjack/backend/observability/metrics.go:89.52,91.2 1 1
+blackjack/backend/observability/metrics.go:93.74,95.2 1 1
+blackjack/backend/observability/metrics.go:97.31,99.2 1 1
+blackjack/backend/observability/metrics.go:101.31,103.2 1 1
+blackjack/backend/observability/metrics.go:105.21,107.2 1 1
+blackjack/backend/observability/metrics.go:109.27,111.2 1 1
+blackjack/backend/observability/metrics.go:113.27,115.2 1 1
+blackjack/backend/observability/metrics.go:117.21,119.2 1 1
+blackjack/backend/observability/metrics.go:121.23,123.2 1 1
+blackjack/backend/observability/metrics.go:125.22,127.2 1 1
+blackjack/backend/observability/metrics.go:129.30,131.2 1 1
+blackjack/backend/observability/metrics.go:133.33,135.2 1 1

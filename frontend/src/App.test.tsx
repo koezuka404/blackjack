@@ -342,6 +342,21 @@ describe('App', () => {
     await waitFor(() => expect(getMock).toHaveBeenCalledWith('/rooms/room-tech/play_hint'))
   }, 15000)
 
+  it('shows validation messages when room id is blank after trim', async () => {
+    localStorage.setItem('blackjack.access_token', 'token-roomid-validation')
+    render(<App />)
+
+    fireEvent.change(screen.getByPlaceholderText('ルームID'), { target: { value: '   ' } })
+    fireEvent.click(screen.getByRole('button', { name: '参加' }))
+    await waitFor(() => expect(screen.getByText('ルームIDを入力してください')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: '開始' }))
+    await waitFor(() => expect(screen.getByText('ルームIDを入力してください')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: '再接続' }))
+    await waitFor(() => expect(screen.getByText('接続失敗: ルームIDが空です')).toBeInTheDocument())
+  })
+
   it('logs out and clears to auth view', async () => {
     localStorage.setItem('blackjack.access_token', 'token-logout')
     postMock.mockResolvedValue({ data: { success: true, data: {} } })
@@ -544,6 +559,189 @@ describe('App', () => {
     })
 
     await waitFor(() => expect(screen.getByText(/秒で自動的にこのゲームを終了します/)).toBeInTheDocument())
+  })
+
+  it('shows urgent rematch auto-end style when deadline is near', async () => {
+    localStorage.setItem('blackjack.access_token', 'token-rematch-urgent')
+    postMock.mockImplementation(async (url: string) => {
+      if (url === '/rooms') {
+        return { data: { success: true, data: { room: { id: 'room-rematch-urgent', host_user_id: 'u1', status: 'WAITING' } } } }
+      }
+      if (url === '/rooms/room-rematch-urgent/join') {
+        return { data: { success: true, data: { room: { id: 'room-rematch-urgent', host_user_id: 'u1', status: 'WAITING' } } } }
+      }
+      return { data: { success: true, data: {} } }
+    })
+
+    render(<App />)
+    fireEvent.click(screen.getAllByRole('button', { name: 'AIと対戦する' })[0])
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith('/rooms/room-rematch-urgent/join', {}))
+
+    const ws = MockWebSocket.instances.at(-1) as MockWebSocket
+    act(() => {
+      ws.onopen?.()
+      ws.onmessage?.({
+        data: JSON.stringify({
+          type: 'ROOM_STATE_SYNC',
+          data: {
+            room: { id: 'room-rematch-urgent', status: 'PLAYING' },
+            session: {
+              id: 'session-rematch-urgent',
+              status: 'RESETTING',
+              version: 11,
+              round_no: 1,
+              turn_seat: 1,
+              turn_deadline_at: null,
+              rematch_deadline_at: new Date(Date.now() + 3_000).toISOString(),
+            },
+            dealer: { visible_cards: ['10S', '7D'], hidden: false, card_count: 2 },
+            players: [{ user_id: 'u1', seat_no: 1, status: 'ACTIVE', is_me: true, hand: ['9H', '8C'], card_count: 2, outcome: 'WIN', final_score: 17 }],
+            my_actions: { can_hit: false, can_stand: false, can_rematch_vote: true },
+          },
+        }),
+      })
+    })
+
+    await waitFor(() => expect(document.querySelector('.rematch-auto-end-timer-urgent')).not.toBeNull())
+  })
+
+  it('shows turn timer urgent and over states', async () => {
+    localStorage.setItem('blackjack.access_token', 'token-turn-timer')
+    postMock.mockImplementation(async (url: string) => {
+      if (url === '/rooms') {
+        return { data: { success: true, data: { room: { id: 'room-turn', host_user_id: 'u1', status: 'WAITING' } } } }
+      }
+      if (url === '/rooms/room-turn/join') {
+        return { data: { success: true, data: { room: { id: 'room-turn', host_user_id: 'u1', status: 'WAITING' } } } }
+      }
+      return { data: { success: true, data: {} } }
+    })
+
+    render(<App />)
+    fireEvent.click(screen.getAllByRole('button', { name: 'AIと対戦する' })[0])
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith('/rooms/room-turn/join', {}))
+
+    const ws = MockWebSocket.instances.at(-1) as MockWebSocket
+    act(() => {
+      ws.onopen?.()
+      ws.onmessage?.({
+        data: JSON.stringify({
+          type: 'ROOM_STATE_SYNC',
+          data: {
+            room: { id: 'room-turn', status: 'PLAYING' },
+            session: {
+              id: 'session-turn',
+              status: 'PLAYER_TURN',
+              version: 3,
+              round_no: 1,
+              turn_seat: 1,
+              turn_deadline_at: new Date(Date.now() + 4_000).toISOString(),
+              rematch_deadline_at: null,
+            },
+            dealer: { visible_cards: ['10S'], hidden: true, card_count: 2 },
+            players: [{ user_id: 'u1', seat_no: 1, status: 'ACTIVE', is_me: true, hand: ['9H'], card_count: 1 }],
+            my_actions: { can_hit: true, can_stand: false, can_rematch_vote: false },
+          },
+        }),
+      })
+    })
+    await waitFor(() => expect(document.querySelector('.turn-timer-urgent')).not.toBeNull())
+
+    act(() => {
+      ws.onmessage?.({
+        data: JSON.stringify({
+          type: 'ROOM_STATE_SYNC',
+          data: {
+            room: { id: 'room-turn', status: 'PLAYING' },
+            session: {
+              id: 'session-turn',
+              status: 'PLAYER_TURN',
+              version: 4,
+              round_no: 1,
+              turn_seat: 1,
+              turn_deadline_at: new Date(Date.now() - 2_000).toISOString(),
+              rematch_deadline_at: null,
+            },
+            dealer: { visible_cards: ['10S'], hidden: true, card_count: 2 },
+            players: [{ user_id: 'u1', seat_no: 1, status: 'ACTIVE', is_me: true, hand: ['9H'], card_count: 1 }],
+            my_actions: { can_hit: true, can_stand: false, can_rematch_vote: false },
+          },
+        }),
+      })
+    })
+    await waitFor(() => expect(screen.getByText('時間切れ')).toBeInTheDocument())
+    expect(screen.getByText('（時間切れであなたの負け）')).toBeInTheDocument()
+  })
+
+  it('does not show turn timer when player cannot act', async () => {
+    localStorage.setItem('blackjack.access_token', 'token-turn-no-actions')
+    postMock.mockImplementation(async (url: string) => {
+      if (url === '/rooms') {
+        return { data: { success: true, data: { room: { id: 'room-turn-no-actions', host_user_id: 'u1', status: 'WAITING' } } } }
+      }
+      if (url === '/rooms/room-turn-no-actions/join') {
+        return { data: { success: true, data: { room: { id: 'room-turn-no-actions', host_user_id: 'u1', status: 'WAITING' } } } }
+      }
+      return { data: { success: true, data: {} } }
+    })
+
+    render(<App />)
+    fireEvent.click(screen.getAllByRole('button', { name: 'AIと対戦する' })[0])
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith('/rooms/room-turn-no-actions/join', {}))
+
+    const ws = MockWebSocket.instances.at(-1) as MockWebSocket
+    act(() => {
+      ws.onopen?.()
+      ws.onmessage?.({
+        data: JSON.stringify({
+          type: 'ROOM_STATE_SYNC',
+          data: {
+            room: { id: 'room-turn-no-actions', status: 'PLAYING' },
+            session: {
+              id: 'session-turn-no-actions',
+              status: 'PLAYER_TURN',
+              version: 2,
+              round_no: 1,
+              turn_seat: 1,
+              turn_deadline_at: new Date(Date.now() + 20_000).toISOString(),
+              rematch_deadline_at: null,
+            },
+            dealer: { visible_cards: ['10S'], hidden: true, card_count: 2 },
+            players: [{ user_id: 'u1', seat_no: 1, status: 'ACTIVE', is_me: true, hand: ['9H'], card_count: 1 }],
+            my_actions: { can_hit: false, can_stand: false, can_rematch_vote: false },
+          },
+        }),
+      })
+    })
+
+    await waitFor(() => expect(screen.queryByText(/行動制限時間:/)).not.toBeInTheDocument())
+  })
+
+  it('shows websocket reconnect banner after disconnect', async () => {
+    localStorage.setItem('blackjack.access_token', 'token-reconnect-banner')
+    postMock.mockImplementation(async (url: string) => {
+      if (url === '/rooms') {
+        return { data: { success: true, data: { room: { id: 'room-reconnect-banner', host_user_id: 'u1', status: 'WAITING' } } } }
+      }
+      if (url === '/rooms/room-reconnect-banner/join') {
+        return { data: { success: true, data: { room: { id: 'room-reconnect-banner', host_user_id: 'u1', status: 'WAITING' } } } }
+      }
+      return { data: { success: true, data: {} } }
+    })
+
+    render(<App />)
+    fireEvent.click(screen.getAllByRole('button', { name: 'AIと対戦する' })[0])
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith('/rooms/room-reconnect-banner/join', {}))
+
+    const ws = MockWebSocket.instances.at(-1) as MockWebSocket
+    act(() => {
+      ws.onopen?.()
+      ws.onclose?.({ code: 1006, reason: 'network', wasClean: false } as CloseEvent)
+    })
+
+    await waitFor(() =>
+      expect(screen.getByText(/WebSocketが切断されました。自動再接続まで あと \d+ 秒/)).toBeInTheDocument(),
+    )
   })
 
   it('starts game from primary button and shows started state', async () => {

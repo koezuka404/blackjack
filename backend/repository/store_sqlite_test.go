@@ -38,7 +38,7 @@ func TestStore_SQLite_CoversCRUD(t *testing.T) {
 	s := newSQLiteStore(t)
 	now := time.Now().UTC()
 
-	// transaction + room
+
 	err := s.Transaction(ctx, func(tx Store) error {
 		return tx.CreateRoom(ctx, &model.Room{ID: "r1", HostUserID: "u1", Status: model.RoomStatusWaiting, CreatedAt: now, UpdatedAt: now})
 	})
@@ -63,7 +63,7 @@ func TestStore_SQLite_CoversCRUD(t *testing.T) {
 		t.Fatalf("count rooms: n=%d err=%v", n, err)
 	}
 
-	// room players
+
 	rp := &model.RoomPlayer{RoomID: "r1", UserID: "u1", SeatNo: 1, Status: model.RoomPlayerActive, JoinedAt: now}
 	if err := s.CreateRoomPlayer(ctx, rp); err != nil {
 		t.Fatalf("create room player: %v", err)
@@ -83,7 +83,7 @@ func TestStore_SQLite_CoversCRUD(t *testing.T) {
 		t.Fatalf("list room players: len=%d err=%v", len(rps), err)
 	}
 
-	// sessions
+
 	deck := []model.StoredCard{{Rank: "A", Suit: "S"}, {Rank: "10", Suit: "H"}}
 	sess := &model.GameSession{ID: "s1", RoomID: "r1", RoundNo: 1, Status: model.SessionStatusPlayerTurn, Version: 1, Deck: deck, TurnSeat: 1, CreatedAt: now, UpdatedAt: now}
 	if err := s.CreateSession(ctx, sess); err != nil {
@@ -139,7 +139,7 @@ func TestStore_SQLite_CoversCRUD(t *testing.T) {
 		t.Fatalf("count sessions: n=%d err=%v", n, err)
 	}
 
-	// player/dealer/action/rematch/round
+
 	ps := &model.PlayerState{SessionID: "s1", UserID: "u1", SeatNo: 1, Status: model.PlayerStatusActive, Hand: []model.StoredCard{{Rank: "9", Suit: "C"}}}
 	if err := s.CreatePlayerState(ctx, ps); err != nil {
 		t.Fatalf("create player state: %v", err)
@@ -205,7 +205,7 @@ func TestStore_SQLite_CoversCRUD(t *testing.T) {
 		t.Fatalf("list round logs by room: len=%d err=%v", len(list), err)
 	}
 
-	// users + auth sessions
+
 	u := &model.User{ID: "u1", Username: "alice", PasswordHash: "hash", CreatedAt: now, UpdatedAt: now}
 	if err := s.CreateUser(ctx, u); err != nil {
 		t.Fatalf("create user: %v", err)
@@ -248,7 +248,7 @@ func TestStore_SQLite_CoversCRUD(t *testing.T) {
 		t.Fatalf("delete expired sessions: %v", err)
 	}
 
-	// cleanup delete by room
+
 	if err := s.DeleteRoomPlayersByRoomID(ctx, "r1"); err != nil {
 		t.Fatalf("delete room players by room: %v", err)
 	}

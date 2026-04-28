@@ -9,7 +9,7 @@ import (
 	"blackjack/backend/model"
 )
 
-// marshalStoredCardsHook はテスト専用。nil のとき通常の JSON マーシャルを使う。
+
 var marshalStoredCardsHook func([]model.StoredCard) ([]byte, error)
 
 func marshalStoredCards(c []model.StoredCard) ([]byte, error) {
@@ -302,7 +302,7 @@ func actionLogRecordFromDomain(a *model.ActionLog) *ActionLogRecord {
 		return nil
 	}
 	actorUserID := strings.TrimSpace(a.ActorUserID)
-	// Postgres の actor_user_id は uuid 型。SYSTEM 系で空が来た場合は対象ユーザーへ寄せる（旧バイナリ／欠損行の保険）。
+
 	if actorUserID == "" && a.ActorType == model.ActorTypeSystem {
 		if tid := strings.TrimSpace(a.TargetUserID); tid != "" {
 			actorUserID = tid

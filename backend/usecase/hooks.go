@@ -8,7 +8,7 @@ import (
 	"blackjack/backend/model"
 )
 
-// テストから一時的に差し替え可能なフック（本番は既定実装のまま）。
+
 var (
 	shuffleIntn = func(max *big.Int) (*big.Int, error) {
 		return crand.Int(crand.Reader, max)

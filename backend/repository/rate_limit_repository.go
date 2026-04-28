@@ -10,7 +10,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// RateLimitRepository はレート制御の永続化/外部I/O（Redis）を扱うポート。
+
 type RateLimitRepository interface {
 	Allow(ctx context.Context, key string, rate float64, capacity float64, cost float64, nowMS int64) (allowed bool, tokens float64, retryAfterMS int64, err error)
 }

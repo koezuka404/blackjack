@@ -44,7 +44,7 @@ func setAuthContextFromToken(c echo.Context) {
 	}
 }
 
-// skipJWTAuth はログイン／登録と、JWT を HTTP で要求しない経路（WS は Upgrade 後の AUTH メッセージで検証）。
+
 func skipJWTAuth(c echo.Context) bool {
 	p := c.Path()
 	switch p {

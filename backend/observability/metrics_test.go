@@ -13,6 +13,7 @@ func TestMetricsFunctionsSmoke(t *testing.T) {
 	IncVersionConflict()
 	IncDuplicateAction()
 	IncAutoStand()
+	IncTimeForfeit()
 	IncDealerDraw()
 	SetRoomCount(10)
 	SetSessionCount(20)

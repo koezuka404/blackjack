@@ -6,3 +6,4 @@ backend/server
 node_modules/
 dist/
 backend/.gomodcache/
+.vercel
