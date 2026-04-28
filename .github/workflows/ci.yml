@@ -261,15 +261,19 @@ jobs:
             sleep 1
           done
 
-          curl -s "${AUTH[@]}" -X POST "$BASE/rooms/$ROOM_ID/start" | jq -e '.success == true' >/dev/null
-          VER3=$(curl -s "${AUTH[@]}" "$BASE/rooms/$ROOM_ID" | jq -r '.data.session.version')
+          ROOM_RESP2=$(curl -s "${AUTH[@]}" -X POST "$BASE/rooms")
+          ROOM_ID2=$(echo "$ROOM_RESP2" | jq -r '.data.room.id')
+          test -n "$ROOM_ID2" && test "$ROOM_ID2" != "null"
+          curl -s "${AUTH[@]}" -X POST "$BASE/rooms/$ROOM_ID2/join" | jq -e '.success == true' >/dev/null
+          curl -s "${AUTH[@]}" -X POST "$BASE/rooms/$ROOM_ID2/start" | jq -e '.success == true' >/dev/null
+          VER3=$(curl -s "${AUTH[@]}" "$BASE/rooms/$ROOM_ID2" | jq -r '.data.session.version')
           AID3="stand-second-$(date +%s)-$RANDOM"
           curl -s "${AUTH[@]}" -H "Content-Type: application/json" \
-            -d "{\"expected_version\":$VER3,\"action_id\":\"$AID3\"}" -X POST "$BASE/rooms/$ROOM_ID/stand" \
+            -d "{\"expected_version\":$VER3,\"action_id\":\"$AID3\"}" -X POST "$BASE/rooms/$ROOM_ID2/stand" \
             | jq -e '.success == true or .error.code == "invalid_game_state"' >/dev/null
 
           for i in {1..30}; do
-            ROOM_STATE2=$(curl -s "${AUTH[@]}" "$BASE/rooms/$ROOM_ID")
+            ROOM_STATE2=$(curl -s "${AUTH[@]}" "$BASE/rooms/$ROOM_ID2")
             echo "$ROOM_STATE2" | jq -e '.success == true' >/dev/null
             SESSION_STATUS2=$(echo "$ROOM_STATE2" | jq -r '.data.session.status // "NONE"')
             if [ "$SESSION_STATUS2" = "RESETTING" ]; then
@@ -282,7 +286,7 @@ jobs:
           OLD_SESSION_ID2=$(echo "$ROOM_STATE2" | jq -r '.data.session.id // ""')
           test -n "$OLD_SESSION_ID2"
 
-          ROOM_ID="$ROOM_ID" TOKEN="$TOKEN" WS_BASE="$WS_BASE" CUR_VER="$CUR_VER2" node <<'NODE'
+          ROOM_ID="$ROOM_ID2" TOKEN="$TOKEN" WS_BASE="$WS_BASE" CUR_VER="$CUR_VER2" node <<'NODE'
           const roomID = process.env.ROOM_ID;
           const token = process.env.TOKEN;
           const wsBase = process.env.WS_BASE.replace(/\/+$/, '');
@@ -345,7 +349,7 @@ jobs:
           NODE
 
           for i in {1..30}; do
-            AFTER_TRUE=$(curl -s "${AUTH[@]}" "$BASE/rooms/$ROOM_ID")
+            AFTER_TRUE=$(curl -s "${AUTH[@]}" "$BASE/rooms/$ROOM_ID2")
             echo "$AFTER_TRUE" | jq -e '.success == true' >/dev/null
             NEW_SESSION_ID=$(echo "$AFTER_TRUE" | jq -r '.data.session.id // ""')
             NEW_SESSION_STATUS=$(echo "$AFTER_TRUE" | jq -r '.data.session.status // ""')
@@ -469,7 +473,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@master
         with:
           scan-type: fs
           scan-ref: .
