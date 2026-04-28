@@ -96,10 +96,19 @@ jobs:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
 
-      # Node 22+ provides global WebSocket for integration WS smoke tests (inline `node` heredocs).
+      # Inline WS scripts use the `ws` package so they work even if global WebSocket is unavailable.
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+
+      - name: Install ws for integration WebSocket smoke tests
+        run: |
+          WS_DIR="${RUNNER_TEMP}/ci-ws-client"
+          mkdir -p "$WS_DIR"
+          cd "$WS_DIR"
+          npm init -y >/dev/null 2>&1
+          npm install ws@8 --silent
+          echo "NODE_PATH=${WS_DIR}/node_modules" >> "$GITHUB_ENV"
 
       - name: Run DB migrations
         env:
@@ -184,6 +193,7 @@ jobs:
           test -n "$RESETTING_SESSION_ID"
 
           ROOM_ID="$ROOM_ID" TOKEN="$TOKEN" WS_BASE="$WS_BASE" CUR_VER="$CUR_VER" node <<'NODE'
+          const WebSocket = require('ws');
           const roomID = process.env.ROOM_ID;
           const token = process.env.TOKEN;
           const wsBase = process.env.WS_BASE.replace(/\/+$/, '');
@@ -296,6 +306,7 @@ jobs:
           test -n "$OLD_SESSION_ID2"
 
           ROOM_ID="$ROOM_ID2" TOKEN="$TOKEN" WS_BASE="$WS_BASE" CUR_VER="$CUR_VER2" node <<'NODE'
+          const WebSocket = require('ws');
           const roomID = process.env.ROOM_ID;
           const token = process.env.TOKEN;
           const wsBase = process.env.WS_BASE.replace(/\/+$/, '');
