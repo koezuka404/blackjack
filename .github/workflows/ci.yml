@@ -96,6 +96,11 @@ jobs:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
 
+      # Node 22+ provides global WebSocket for integration WS smoke tests (inline `node` heredocs).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Run DB migrations
         env:
           DATABASE_URL: postgres://blackjack:blackjack@localhost:5432/blackjack?sslmode=disable
