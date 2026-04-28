@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, ReactElement } from 'react'
 import axios, { AxiosError } from 'axios'
 import './App.css'
@@ -286,6 +286,21 @@ export function outcomeToLabel(outcome?: string | null): { text: string; tone: '
   }
 }
 
+/** サーバの turn_deadline からの残り ms 用。0 以下は時間切れ扱い。 */
+export function formatPlayerTurnCountdown(remainingMs: number): { text: string; urgent: boolean; isOver: boolean } {
+  if (remainingMs <= 0) {
+    return { text: '時間切れ', urgent: true, isOver: true }
+  }
+  const sec = Math.max(1, Math.ceil(remainingMs / 1000))
+  const urgent = sec <= 5
+  const mm = Math.floor(sec / 60)
+  const ss = sec % 60
+  if (mm > 0) {
+    return { text: `${mm}:${String(ss).padStart(2, '0')}`, urgent, isOver: false }
+  }
+  return { text: `${sec}秒`, urgent, isOver: false }
+}
+
 function App() {
   const [username, setUsername] = useState('pm_user_01')
   const [password, setPassword] = useState('password12')
@@ -303,6 +318,24 @@ function App() {
   const [isInRoom, setIsInRoom] = useState(false)
   const [hasStartedCurrentRoom, setHasStartedCurrentRoom] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
+  /** ルーム入室中のみ WS を自動再接続する（退出・ログアウト時は false にする） */
+  const maintainWsConnectionRef = useRef(false)
+  /** connectWebSocket が既存ソケットを差し替えるときの onclose は再接続しない */
+  const silentWsReplaceCloseRef = useRef(false)
+  const wsReconnectAttemptRef = useRef(0)
+  const wsReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const wsReconnectDeadlineRef = useRef<number | null>(null)
+  const wsReconnectDisplayIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [wsReconnectRemainingSec, setWsReconnectRemainingSec] = useState<number | null>(null)
+  /** null でなくれば切断後に自動再接続が予約されている（秒数と別に表示を保証する） */
+  const [wsReconnectBannerVisible, setWsReconnectBannerVisible] = useState(false)
+  const [turnClockNowMs, setTurnClockNowMs] = useState(() => Date.now())
+  const tokenRef = useRef(token)
+  const roomIDRef = useRef(roomID)
+  const isInRoomRef = useRef(isInRoom)
+  tokenRef.current = token
+  roomIDRef.current = roomID
+  isInRoomRef.current = isInRoom
 
   const authClient = useMemo(() => {
     const client = axios.create({
@@ -323,6 +356,43 @@ function App() {
 
   const appendWSLog = (message: string) => {
     setWsLog((prev) => [`${new Date().toISOString()} ${message}`, ...prev].slice(0, 60))
+  }
+
+  const clearReconnectCountdown = () => {
+    wsReconnectDeadlineRef.current = null
+    if (wsReconnectDisplayIntervalRef.current) {
+      clearInterval(wsReconnectDisplayIntervalRef.current)
+      wsReconnectDisplayIntervalRef.current = null
+    }
+    setWsReconnectRemainingSec(null)
+    setWsReconnectBannerVisible(false)
+  }
+
+  const startReconnectCountdown = (delayMs: number) => {
+    if (wsReconnectDisplayIntervalRef.current) {
+      clearInterval(wsReconnectDisplayIntervalRef.current)
+      wsReconnectDisplayIntervalRef.current = null
+    }
+    wsReconnectDeadlineRef.current = Date.now() + delayMs
+    setWsReconnectBannerVisible(true)
+    const tick = () => {
+      const d = wsReconnectDeadlineRef.current
+      if (d === null) {
+        return
+      }
+      const msLeft = d - Date.now()
+      const left = Math.max(0, Math.ceil(msLeft / 1000))
+      setWsReconnectRemainingSec(left > 0 ? left : 0)
+      if (msLeft <= 0) {
+        if (wsReconnectDisplayIntervalRef.current) {
+          clearInterval(wsReconnectDisplayIntervalRef.current)
+          wsReconnectDisplayIntervalRef.current = null
+        }
+        return
+      }
+    }
+    tick()
+    wsReconnectDisplayIntervalRef.current = window.setInterval(tick, 250)
   }
 
   const saveToken = (nextToken: string) => {
@@ -372,11 +442,19 @@ function App() {
       setRoomID('')
       setRooms([])
       setRoomState(null)
+      maintainWsConnectionRef.current = false
+      isInRoomRef.current = false
       setIsInRoom(false)
       setHasStartedCurrentRoom(false)
       setHistoryJSON('')
       setWsLog([])
+      wsReconnectAttemptRef.current = 0
       /* v8 ignore start */
+      if (wsReconnectTimerRef.current) {
+        clearTimeout(wsReconnectTimerRef.current)
+        wsReconnectTimerRef.current = null
+      }
+      clearReconnectCountdown()
       if (wsRef.current) {
         /* c8 ignore next 2 */
         wsRef.current.close()
@@ -404,16 +482,50 @@ function App() {
   }
 
   const joinRoom = async () => {
+    /* v8 ignore start */
+    if (!token) {
+      /* c8 ignore next 2 */
+      setStatusMessage('先にログインしてください')
+      return
+    }
+    /* v8 ignore stop */
+    const rid = roomID.trim()
+    if (!rid) {
+      setStatusMessage('ルームIDを入力してください')
+      return
+    }
     await withStatus('ルーム参加', async () => {
-      const response = await authClient.post<ApiResponse<{ room: RoomSummary }>>(`/rooms/${roomID}/join`, {})
+      const response = await authClient.post<ApiResponse<{ room: RoomSummary }>>(`/rooms/${rid}/join`, {})
       unwrapData(response.data)
+      roomIDRef.current = rid
+      setRoomID(rid)
+      isInRoomRef.current = true
+      setIsInRoom(true)
+      setHasStartedCurrentRoom(false)
+      maintainWsConnectionRef.current = true
+      wsReconnectAttemptRef.current = 0
+      connectWebSocket()
     })
   }
 
   const startRoom = async () => {
+    /* v8 ignore start */
+    if (!token) {
+      /* c8 ignore next 2 */
+      setStatusMessage('先にログインしてください')
+      return
+    }
+    /* v8 ignore stop */
+    const rid = roomID.trim()
+    if (!rid) {
+      setStatusMessage('ルームIDを入力してください')
+      return
+    }
     await withStatus('ゲーム開始', async () => {
-      const response = await authClient.post<ApiResponse<{ session: { version: number } }>>(`/rooms/${roomID}/start`, {})
+      const response = await authClient.post<ApiResponse<{ session: { version: number } }>>(`/rooms/${rid}/start`, {})
       unwrapData(response.data)
+      setHasStartedCurrentRoom(true)
+      connectWebSocket()
       await fetchRoom()
     })
   }
@@ -463,8 +575,9 @@ function App() {
   }
 
   const connectWebSocket = (authToken?: string) => {
-    const nextToken = authToken ?? token
-    if (!roomID) {
+    const resolvedRoomID = roomIDRef.current.trim()
+    const nextToken = authToken ?? tokenRef.current
+    if (!resolvedRoomID) {
       setStatusMessage('接続失敗: ルームIDが空です')
       return
     }
@@ -473,18 +586,25 @@ function App() {
       setStatusMessage('接続失敗: 先にログインしてください')
       return
     }
+    clearReconnectCountdown()
     if (wsRef.current) {
+      silentWsReplaceCloseRef.current = true
       wsRef.current.close()
       wsRef.current = null
     }
     /* v8 ignore stop */
-    const url = `${WS_BASE_URL}/rooms/${roomID}`
+    if (wsReconnectTimerRef.current) {
+      clearTimeout(wsReconnectTimerRef.current)
+      wsReconnectTimerRef.current = null
+    }
+    const url = `${WS_BASE_URL}/rooms/${resolvedRoomID}`
     const socket = new WebSocket(url)
     wsRef.current = socket
     setWsConnectionState('connecting')
     appendWSLog(`WS open request -> ${url}`)
 
     socket.onopen = () => {
+      wsReconnectAttemptRef.current = 0
       setWsConnectionState('connected')
       appendWSLog('WS接続完了')
       socket.send(
@@ -517,7 +637,7 @@ function App() {
         if (isRoomSyncEvent(parsed)) {
           setRoomState(parsed.data)
         } else if (isWsErrorEvent(parsed)) {
-          setStatusMessage('WebSocketエラーが発生しました')
+          appendWSLog(`WSエラー応答: ${parsed.error.code}`)
         }
       } catch {
         // no-op
@@ -525,23 +645,105 @@ function App() {
     }
 
     socket.onerror = () => {
-      /* c8 ignore next 2 */
-      setStatusMessage('WSエラー')
       appendWSLog('WSエラー')
     }
 
     socket.onclose = () => {
-      /* c8 ignore next 2 */
+      /* c8 ignore start */
+      if (silentWsReplaceCloseRef.current) {
+        silentWsReplaceCloseRef.current = false
+        return
+      }
       setWsConnectionState('disconnected')
       appendWSLog('WS切断')
+      /* v8 ignore next 3 — leave で ws を閉じる直前に ref で false にしている */
+      if (!maintainWsConnectionRef.current || !isInRoomRef.current) {
+        return
+      }
+      const nextRoom = roomIDRef.current.trim()
+      if (!nextRoom || !tokenRef.current) {
+        return
+      }
+      const attempt = wsReconnectAttemptRef.current
+      wsReconnectAttemptRef.current = attempt + 1
+      const delayMs = Math.min(30_000, 800 * 2 ** Math.min(attempt, 6))
+      appendWSLog(`WS自動再接続を ${delayMs}ms 後に試行 (試行 ${attempt + 1})`)
+      startReconnectCountdown(delayMs)
+      wsReconnectTimerRef.current = setTimeout(() => {
+        wsReconnectTimerRef.current = null
+        if (!maintainWsConnectionRef.current || !isInRoomRef.current) {
+          return
+        }
+        if (!roomIDRef.current.trim() || !tokenRef.current) {
+          return
+        }
+        connectWebSocket(tokenRef.current)
+      }, delayMs)
+      /* c8 ignore stop */
     }
   }
+
+  useEffect(() => {
+    return () => {
+      if (wsReconnectTimerRef.current) {
+        clearTimeout(wsReconnectTimerRef.current)
+        wsReconnectTimerRef.current = null
+      }
+      clearReconnectCountdown()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (wsConnectionState !== 'connected') {
+      return
+    }
+    const intervalId = window.setInterval(() => {
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        return
+      }
+      const body = JSON.stringify({
+        type: 'PING',
+        request_id: randomID('ka-ping'),
+      })
+      wsRef.current.send(body)
+    }, 25_000)
+    return () => {
+      window.clearInterval(intervalId)
+    }
+  }, [wsConnectionState])
+
+  const turnDeadlineRaw = roomState?.session.turn_deadline_at
+  const turnDeadlineMs = turnDeadlineRaw ? Date.parse(turnDeadlineRaw) : Number.NaN
+  const showTurnTimer =
+    Boolean(roomState?.session.id) &&
+    roomState?.session.status === 'PLAYER_TURN' &&
+    Number.isFinite(turnDeadlineMs) &&
+    Boolean(roomState?.my_actions.can_hit || roomState?.my_actions.can_stand)
+  const rematchDeadlineRaw = roomState?.session.rematch_deadline_at
+  const rematchDeadlineMs = rematchDeadlineRaw ? Date.parse(rematchDeadlineRaw) : Number.NaN
+  const showRematchAutoEndTimer =
+    Boolean(roomState?.session.id) && roomState?.session.status === 'RESETTING' && Number.isFinite(rematchDeadlineMs)
+
+  useEffect(() => {
+    if (!showTurnTimer && !showRematchAutoEndTimer) {
+      return
+    }
+    const intervalId = window.setInterval(() => {
+      setTurnClockNowMs(Date.now())
+    }, 250)
+    return () => {
+      window.clearInterval(intervalId)
+    }
+  }, [showTurnTimer, showRematchAutoEndTimer, turnDeadlineRaw, rematchDeadlineRaw])
+
+  const turnCountdownView = showTurnTimer
+    ? formatPlayerTurnCountdown(turnDeadlineMs - turnClockNowMs)
+    : { text: '', urgent: false, isOver: false }
+  const rematchAutoEndSec = showRematchAutoEndTimer ? Math.max(0, Math.ceil((rematchDeadlineMs - turnClockNowMs) / 1000)) : null
 
   const sendWSMessage = (payload: Record<string, unknown>) => {
     /* v8 ignore start */
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      /* c8 ignore next 2 */
-      setStatusMessage('WS未接続です')
       return
     }
     /* v8 ignore stop */
@@ -575,9 +777,13 @@ function App() {
         ])
       }
       await authClient.post<ApiResponse<{ room: RoomSummary }>>(`/rooms/${targetRoomID}/join`, {})
+      roomIDRef.current = targetRoomID
       setRoomID(targetRoomID)
+      isInRoomRef.current = true
       setIsInRoom(true)
       setHasStartedCurrentRoom(false)
+      maintainWsConnectionRef.current = true
+      wsReconnectAttemptRef.current = 0
       connectWebSocket()
     })
     setIsJoiningRoom(false)
@@ -603,10 +809,18 @@ function App() {
     /* v8 ignore stop */
     await withStatus('ルーム退出', async () => {
       await authClient.post<ApiResponse<{ room: RoomSummary }>>(`/rooms/${roomID}/leave`, {})
+      maintainWsConnectionRef.current = false
+      isInRoomRef.current = false
       setIsInRoom(false)
       setHasStartedCurrentRoom(false)
       setRoomState(null)
+      wsReconnectAttemptRef.current = 0
       /* v8 ignore start */
+      if (wsReconnectTimerRef.current) {
+        clearTimeout(wsReconnectTimerRef.current)
+        wsReconnectTimerRef.current = null
+      }
+      clearReconnectCountdown()
       if (wsRef.current) {
         /* c8 ignore next 2 */
         wsRef.current.close()
@@ -692,14 +906,27 @@ function App() {
         </div>
       </div>
       {statusMessage && <p className="subtle">{statusMessage}</p>}
+      {wsReconnectBannerVisible && (
+        <p className="ws-reconnect-countdown" role="status" aria-live="polite">
+          WebSocketが切断されました。自動再接続まで
+          {wsReconnectRemainingSec === null ? '…' : ` あと ${wsReconnectRemainingSec} 秒`}
+        </p>
+      )}
 
       <section className="layout-main">
         <div className="left-pane">
           <section className="panel panel-table">
-        {outcomeView.tone !== 'idle' && <div className={`result-banner result-${outcomeView.tone}`}>{outcomeView.text}</div>}
+        <div className="game-notice-top" aria-live="polite">
+          {showRematchAutoEndTimer && (
+            <div className={`rematch-auto-end-timer ${rematchAutoEndSec !== null && rematchAutoEndSec <= 5 ? 'rematch-auto-end-timer-urgent' : ''}`}>
+              あと {rematchAutoEndSec ?? 0} 秒で自動的にこのゲームを終了します
+            </div>
+          )}
+          {outcomeView.tone !== 'idle' && <div className={`result-banner result-${outcomeView.tone}`}>{outcomeView.text}</div>}
+        </div>
         <div className="row start-row">
           <button onClick={joinRoomFlow} className="btn-join-room" disabled={isJoiningRoom || isInRoom}>
-            {isJoiningRoom ? '参加中…' : 'ルームに入る'}
+            {isJoiningRoom ? '参加中…' : 'AIと対戦する'}
           </button>
           <button onClick={leaveRoomFlow} className="btn-leave-room" disabled={!isInRoom || Boolean(roomState?.session.id)}>
             ルーム退出
@@ -714,6 +941,14 @@ function App() {
           <button onClick={() => connectWebSocket()} disabled={!roomID || !token}>
             再接続
           </button>
+        </div>
+        <div className="game-notice-turn" aria-live="polite">
+          {showTurnTimer && (
+            <div className={`turn-timer ${turnCountdownView.isOver ? 'turn-timer-over' : turnCountdownView.urgent ? 'turn-timer-urgent' : ''}`}>
+              <strong>行動制限時間:</strong> {turnCountdownView.text}
+              {turnCountdownView.isOver && <span className="turn-timer-note">（時間切れであなたの負け）</span>}
+            </div>
+          )}
         </div>
         <div className="table-felt">
           <div className="table-top-row">
@@ -774,7 +1009,7 @@ function App() {
             disabled={wsConnectionState !== 'connected' || !roomState?.my_actions.can_rematch_vote}
             className="btn-rematch"
           >
-            再戦する
+            次のゲーム
           </button>
           <button
             onClick={() =>
@@ -789,7 +1024,7 @@ function App() {
             disabled={wsConnectionState !== 'connected' || !roomState?.my_actions.can_rematch_vote}
             className="btn-rematch"
           >
-            再戦しない
+            終了する
           </button>
         </div>
           </section>
@@ -869,7 +1104,7 @@ function App() {
           <section className="panel tech-panel">
             <h2>ルーム操作</h2>
             <div className="row">
-              <button onClick={joinRoomFlow}>ルームに入る</button>
+              <button onClick={joinRoomFlow}>AIと対戦する</button>
               <input value={roomID} onChange={(event) => setRoomID(event.target.value)} placeholder="ルームID" />
               <button onClick={createRoom}>作成</button>
               <button onClick={listRooms}>一覧</button>

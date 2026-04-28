@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import {
+  formatPlayerTurnCountdown,
   handScore,
   isRoomSyncEvent,
   isWsErrorEvent,
@@ -152,6 +153,13 @@ describe('App helper functions', () => {
     expect(screen.getByLabelText('A♠')).toBeInTheDocument()
     expect(screen.getByLabelText('unknown-card')).toBeInTheDocument()
     expect(screen.getByLabelText('hidden-card')).toBeInTheDocument()
+  })
+
+  it('formats player turn countdown view', () => {
+    expect(formatPlayerTurnCountdown(65_000)).toEqual({ text: '1:05', urgent: false, isOver: false })
+    expect(formatPlayerTurnCountdown(4_000)).toEqual({ text: '4秒', urgent: true, isOver: false })
+    expect(formatPlayerTurnCountdown(0)).toEqual({ text: '時間切れ', urgent: true, isOver: true })
+    expect(formatPlayerTurnCountdown(-10)).toEqual({ text: '時間切れ', urgent: true, isOver: true })
   })
 
   it('maps outcomes to labels', () => {

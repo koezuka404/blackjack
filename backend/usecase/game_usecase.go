@@ -1037,6 +1037,39 @@ func (u *roomService) dealerresult(sess *model.GameSession, p *model.PlayerState
 	}, nil
 }
 
+// dealerresultTimeForfeit は操作時間切れでプレイヤーを敗北に確定する（セッションはディーラーターン前提）。
+func (u *roomService) dealerresultTimeForfeit(sess *model.GameSession, p *model.PlayerState, d *model.DealerState, now time.Time) (*model.RoundLog, error) {
+	d.RevealHole()
+	if err := gameSessionTransition(sess, model.SessionStatusResult); err != nil {
+		return nil, err
+	}
+	if err := gameSessionTransition(sess, model.SessionStatusResetting); err != nil {
+		return nil, err
+	}
+	sess.SetRematchDeadline(now)
+	pScore := u.evaluator.Value(p.Hand)
+	dScore := u.evaluator.Value(d.Hand)
+	if err := playerSetOutcomeUC(p, pScore, model.OutcomeLose); err != nil {
+		return nil, err
+	}
+	d.SetFinalScore(dScore)
+	payloadBytes, err := marshalGameJSON(map[string]any{
+		"player_score": pScore,
+		"dealer_score": dScore,
+		"outcome":      model.OutcomeLose,
+		"time_forfeit": true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &model.RoundLog{
+		SessionID:     sess.ID,
+		RoundNo:       sess.RoundNo,
+		ResultPayload: string(payloadBytes),
+		CreatedAt:     now,
+	}, nil
+}
+
 // MarkConnected は WS 接続時に room_players を ACTIVE に戻す。
 func (u *roomService) MarkConnected(ctx context.Context, roomID, userID string) error {
 	if roomID == "" || userID == "" {
@@ -1166,7 +1199,7 @@ func (u *roomService) processRematchDeadline(ctx context.Context, sessionID stri
 	})
 }
 
-// playerStand はプレイヤーターン締切超過時に SYSTEM 自動スタンドを適用する。
+// playerStand はプレイヤーターン締切超過時に操作時間切れ敗北を適用する（ヒューリスティック時は既存どおり Hit を試みる）。
 func (u *roomService) playerStand(ctx context.Context, sessionID string) error {
 	sess, err := u.store.GetSession(ctx, sessionID)
 	if err != nil {
@@ -1206,28 +1239,31 @@ func (u *roomService) playerStand(ctx context.Context, sessionID string) error {
 	if err := gameSessionTransition(sess, model.SessionStatusDealerTurn); err != nil {
 		return err
 	}
+	sess.SetTurnDeadline(nil)
+	sessPrev := sess.Version
+	roundLog, derr := u.dealerresultTimeForfeit(sess, player, dealer, now)
+	if derr != nil {
+		return derr
+	}
 	room.CurrentSessionID = &sess.ID
 	if err := roomRecalculateStatus(room, 1, true); err != nil {
 		return err
 	}
 	room.Touch(now)
-	sess.SetTurnDeadline(nil)
 	sess.IncrementVersion()
 	sess.Touch(now)
-	sysActionID := "auto-stand:" + sessionID + ":" + strconv.FormatInt(sess.Version, 10)
-	hash := sha256.Sum256([]byte("AUTO_STAND:" + strconv.FormatInt(sess.Version, 10)))
+	sysActionID := "time-forfeit:" + sessionID + ":" + strconv.FormatInt(sess.Version, 10)
+	hash := sha256.Sum256([]byte("TIME_FORFEIT:" + strconv.FormatInt(sess.Version, 10)))
 	actionLog := &model.ActionLog{
-		SessionID:          sess.ID,
-		ActorType:          model.ActorTypeSystem,
-		// Postgres の actor_user_id は uuid 型のため空文字不可。冪等キー用に対象プレイヤーを入れる。
-		ActorUserID:  player.UserID,
-		TargetUserID: player.UserID,
+		SessionID:   sess.ID,
+		ActorType:   model.ActorTypeSystem,
+		ActorUserID: player.UserID, TargetUserID: player.UserID,
 		ActionID:           sysActionID,
-		RequestType:        "AUTO_STAND",
+		RequestType:        "TIME_FORFEIT",
 		RequestPayloadHash: hex.EncodeToString(hash[:]),
 	}
 	err = u.store.Transaction(ctx, func(tx repository.Store) error {
-		ok, err := tx.UpdateSessionIfVersion(ctx, sess, sess.Version-1)
+		ok, err := tx.UpdateSessionIfVersion(ctx, sess, sessPrev)
 		if err != nil {
 			return err
 		}
@@ -1238,6 +1274,9 @@ func (u *roomService) playerStand(ctx context.Context, sessionID string) error {
 			return err
 		}
 		if err := tx.UpdateDealerState(ctx, dealer); err != nil {
+			return err
+		}
+		if err := tx.CreateRoundLog(ctx, roundLog); err != nil {
 			return err
 		}
 		if err := tx.UpdateRoom(ctx, room); err != nil {
@@ -1254,7 +1293,7 @@ func (u *roomService) playerStand(ctx context.Context, sessionID string) error {
 		return SaveActionSuccessSnapshot(ctx, tx, actionLog, string(snapshotBytes))
 	})
 	if err == nil {
-		observability.IncAutoStand()
+		observability.IncTimeForfeit()
 	}
 	return err
 }

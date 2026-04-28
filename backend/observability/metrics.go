@@ -59,6 +59,11 @@ var (
 		Help: "Count of auto-stand executions.",
 	})
 
+	timeForfeitTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "blackjack_player_time_forfeit_total",
+		Help: "Count of player turn timeout forfeit losses.",
+	})
+
 	dealerDrawTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "blackjack_dealer_draw_total",
 		Help: "Count of dealer draw executions.",
@@ -111,6 +116,10 @@ func IncDuplicateAction() {
 
 func IncAutoStand() {
 	autoStandTotal.Inc()
+}
+
+func IncTimeForfeit() {
+	timeForfeitTotal.Inc()
 }
 
 func IncDealerDraw() {

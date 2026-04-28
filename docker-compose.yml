@@ -1,3 +1,5 @@
+# 開発用スタック一式を起動する場合は、このファイルがあるディレクトリ（プロジェクト直下）で実行してください。
+#   docker compose up -d    （またはフォアグラウンドなら docker compose up）
 services:
   postgres:
     image: postgres:15-alpine
@@ -82,6 +84,13 @@ services:
       JWT_SECRET: dev-docker-compose-secret-min-16
     ports:
       - "8080:8080"
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8080/health >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 15s
     depends_on:
       postgres:
         condition: service_healthy
@@ -105,7 +114,7 @@ services:
       - "${WEB_PORT:-80}:80"
     depends_on:
       backend:
-        condition: service_started
+        condition: service_healthy
     networks:
       - blackjack
     restart: unless-stopped

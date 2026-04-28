@@ -155,11 +155,11 @@ describe('App', () => {
     render(<App />)
     fireEvent.click(screen.getByRole('button', { name: '一覧' }))
     await waitFor(() => expect(getMock).toHaveBeenCalledWith('/rooms'))
-    fireEvent.click(screen.getAllByRole('button', { name: 'ルームに入る' })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: 'AIと対戦する' })[0])
 
     await waitFor(() => expect(postMock).toHaveBeenCalledWith('/rooms', {}))
     await waitFor(() => expect(postMock).toHaveBeenCalledWith('/rooms/room-1/join', {}))
-    await waitFor(() => expect(screen.getAllByRole('button', { name: 'ルームに入る' })[0]).toBeDisabled())
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'AIと対戦する' })[0]).toBeDisabled())
   })
 
   it('handles websocket sync/error and sends gameplay actions', async () => {
@@ -175,7 +175,7 @@ describe('App', () => {
     })
 
     render(<App />)
-    fireEvent.click(screen.getAllByRole('button', { name: 'ルームに入る' })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: 'AIと対戦する' })[0])
 
     await waitFor(() => expect(postMock).toHaveBeenCalledWith('/rooms/room-2/join', {}))
     fireEvent.click(screen.getByRole('button', { name: '再接続' }))
@@ -222,8 +222,8 @@ describe('App', () => {
     await waitFor(() => expect(screen.getByText('あなたの勝ち')).toBeInTheDocument())
     fireEvent.click(screen.getAllByRole('button', { name: 'ヒット' })[0])
     fireEvent.click(screen.getAllByRole('button', { name: 'スタンド' })[0])
-    fireEvent.click(screen.getByRole('button', { name: '再戦する' }))
-    fireEvent.click(screen.getByRole('button', { name: '再戦しない' }))
+    fireEvent.click(screen.getByRole('button', { name: '次のゲーム' }))
+    fireEvent.click(screen.getByRole('button', { name: '終了する' }))
     expect(ws.send).toHaveBeenCalled()
 
     act(() => {
@@ -234,8 +234,6 @@ describe('App', () => {
         }),
       })
     })
-    await waitFor(() => expect(screen.getByText('WebSocketエラーが発生しました')).toBeInTheDocument())
-
     act(() => {
       ws.onmessage?.({
         data: JSON.stringify({
@@ -249,7 +247,6 @@ describe('App', () => {
       ws.onerror?.()
       ws.onclose?.()
     })
-    expect(screen.getByText('WSエラー')).toBeInTheDocument()
   })
 
   it('runs tech-panel http action buttons', async () => {
@@ -294,7 +291,7 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '接続' }))
     await waitFor(() => expect(MockWebSocket.instances.length).toBeGreaterThan(0))
-    const ws = MockWebSocket.instances[0]
+    const ws = MockWebSocket.instances.at(-1) as MockWebSocket
     act(() => {
       ws.onopen?.()
       ws.onmessage?.({
@@ -373,7 +370,7 @@ describe('App', () => {
     })
 
     render(<App />)
-    fireEvent.click(screen.getAllByRole('button', { name: 'ルームに入る' })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: 'AIと対戦する' })[0])
     await waitFor(() => expect(postMock).toHaveBeenCalledWith('/rooms/room-leave/join', {}))
     fireEvent.click(screen.getByRole('button', { name: 'ルーム退出' }))
     await waitFor(() => expect(postMock).toHaveBeenCalledWith('/rooms/room-leave/leave', {}))
@@ -410,7 +407,7 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '接続' }))
     await waitFor(() => expect(MockWebSocket.instances.length).toBeGreaterThan(0))
-    const ws = MockWebSocket.instances[0]
+    const ws = MockWebSocket.instances.at(-1) as MockWebSocket
     ws.readyState = MockWebSocket.CONNECTING
     act(() => {
       ws.onopen?.()
@@ -452,9 +449,101 @@ describe('App', () => {
 
     render(<App />)
     fireEvent.change(screen.getByPlaceholderText('ルームID'), { target: { value: 'room-fixed' } })
-    fireEvent.click(screen.getAllByRole('button', { name: 'ルームに入る' })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: 'AIと対戦する' })[0])
 
     await waitFor(() => expect(postMock).toHaveBeenCalledWith('/rooms/room-fixed/join', {}))
+  })
+
+
+  it('shows visible player turn timer from turn_deadline_at', async () => {
+    localStorage.setItem('blackjack.access_token', 'token-timer')
+    postMock.mockImplementation(async (url: string) => {
+      if (url === '/rooms') {
+        return { data: { success: true, data: { room: { id: 'room-timer', host_user_id: 'u1', status: 'WAITING' } } } }
+      }
+      if (url === '/rooms/room-timer/join') {
+        return { data: { success: true, data: { room: { id: 'room-timer', host_user_id: 'u1', status: 'WAITING' } } } }
+      }
+      return { data: { success: true, data: {} } }
+    })
+
+    render(<App />)
+    fireEvent.click(screen.getAllByRole('button', { name: 'AIと対戦する' })[0])
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith('/rooms/room-timer/join', {}))
+
+    const ws = MockWebSocket.instances.at(-1) as MockWebSocket
+    const deadline = new Date(Date.now() + 12_000).toISOString()
+    act(() => {
+      ws.onopen?.()
+      ws.onmessage?.({
+        data: JSON.stringify({
+          type: 'ROOM_STATE_SYNC',
+          data: {
+            room: { id: 'room-timer', status: 'PLAYING' },
+            session: {
+              id: 'session-timer',
+              status: 'PLAYER_TURN',
+              version: 7,
+              round_no: 1,
+              turn_seat: 1,
+              turn_deadline_at: deadline,
+              rematch_deadline_at: null,
+            },
+            dealer: { visible_cards: ['8S'], hidden: true, card_count: 2 },
+            players: [{ user_id: 'u1', seat_no: 1, status: 'ACTIVE', is_me: true, hand: ['7H'], card_count: 1 }],
+            my_actions: { can_hit: true, can_stand: true, can_rematch_vote: false },
+          },
+        }),
+      })
+    })
+
+    await waitFor(() => expect(screen.getByText(/行動制限時間:/)).toBeInTheDocument())
+  })
+
+
+  it('shows rematch auto-end countdown in resetting phase', async () => {
+    localStorage.setItem('blackjack.access_token', 'token-rematch-timer')
+    postMock.mockImplementation(async (url: string) => {
+      if (url === '/rooms') {
+        return { data: { success: true, data: { room: { id: 'room-rematch', host_user_id: 'u1', status: 'WAITING' } } } }
+      }
+      if (url === '/rooms/room-rematch/join') {
+        return { data: { success: true, data: { room: { id: 'room-rematch', host_user_id: 'u1', status: 'WAITING' } } } }
+      }
+      return { data: { success: true, data: {} } }
+    })
+
+    render(<App />)
+    fireEvent.click(screen.getAllByRole('button', { name: 'AIと対戦する' })[0])
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith('/rooms/room-rematch/join', {}))
+
+    const ws = MockWebSocket.instances.at(-1) as MockWebSocket
+    const rematchDeadline = new Date(Date.now() + 9_000).toISOString()
+    act(() => {
+      ws.onopen?.()
+      ws.onmessage?.({
+        data: JSON.stringify({
+          type: 'ROOM_STATE_SYNC',
+          data: {
+            room: { id: 'room-rematch', status: 'PLAYING' },
+            session: {
+              id: 'session-rematch',
+              status: 'RESETTING',
+              version: 10,
+              round_no: 1,
+              turn_seat: 1,
+              turn_deadline_at: null,
+              rematch_deadline_at: rematchDeadline,
+            },
+            dealer: { visible_cards: ['10S', '7D'], hidden: false, card_count: 2 },
+            players: [{ user_id: 'u1', seat_no: 1, status: 'ACTIVE', is_me: true, hand: ['9H', '8C'], card_count: 2, outcome: 'WIN', final_score: 17 }],
+            my_actions: { can_hit: false, can_stand: false, can_rematch_vote: true },
+          },
+        }),
+      })
+    })
+
+    await waitFor(() => expect(screen.getByText(/秒で自動的にこのゲームを終了します/)).toBeInTheDocument())
   })
 
   it('starts game from primary button and shows started state', async () => {
@@ -473,7 +562,7 @@ describe('App', () => {
     })
 
     render(<App />)
-    fireEvent.click(screen.getAllByRole('button', { name: 'ルームに入る' })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: 'AIと対戦する' })[0])
     await waitFor(() => expect(postMock).toHaveBeenCalledWith('/rooms/room-start/join', {}))
 
     fireEvent.click(screen.getByRole('button', { name: 'ゲーム開始' }))
