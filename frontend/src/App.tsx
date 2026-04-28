@@ -333,9 +333,11 @@ function App() {
   const tokenRef = useRef(token)
   const roomIDRef = useRef(roomID)
   const isInRoomRef = useRef(isInRoom)
-  tokenRef.current = token
-  roomIDRef.current = roomID
-  isInRoomRef.current = isInRoom
+  useEffect(() => {
+    tokenRef.current = token
+    roomIDRef.current = roomID
+    isInRoomRef.current = isInRoom
+  }, [token, roomID, isInRoom])
 
   const authClient = useMemo(() => {
     const client = axios.create({
@@ -646,7 +648,7 @@ function App() {
           appendWSLog(`WSエラー応答: ${parsed.error.code}`)
         }
       } catch {
-
+        appendWSLog('WSメッセージのJSON解析に失敗')
       }
     }
 

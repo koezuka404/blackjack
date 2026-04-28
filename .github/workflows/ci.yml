@@ -21,6 +21,10 @@ jobs:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: go vet
         run: go vet ./...
 
@@ -453,6 +457,8 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
