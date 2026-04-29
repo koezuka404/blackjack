@@ -240,15 +240,40 @@ jobs:
 
           USER="smoke_$(date +%s)"
           PASS="password12"
-          SIGNUP=$(curl -fsS -c cookies.txt -b cookies.txt -H "Content-Type: application/json" \
+          SIGNUP=$(curl -sS -c cookies.txt -b cookies.txt -H "Content-Type: application/json" \
             -d "{\"username\":\"$USER\",\"password\":\"$PASS\"}" "$API_BASE_URL/auth/signup")
-          CSRF=$(echo "$SIGNUP" | jq -r '.data.csrf_token')
-          test -n "$CSRF" && test "$CSRF" != "null"
+          SIGNUP_SUCCESS=$(echo "$SIGNUP" | jq -r '.success // false')
+          if [ "$SIGNUP_SUCCESS" != "true" ]; then
+            echo "signup failed: $SIGNUP"
+            exit 1
+          fi
+          CSRF=$(echo "$SIGNUP" | jq -r '.data.csrf_token // ""')
 
-          curl -fsS -c cookies.txt -b cookies.txt "$API_BASE_URL/me" >/dev/null
+          LOGIN=$(curl -sS -c cookies.txt -b cookies.txt -H "Content-Type: application/json" \
+            -d "{\"username\":\"$USER\",\"password\":\"$PASS\"}" "$API_BASE_URL/auth/login")
+          TOKEN=$(echo "$LOGIN" | jq -r '.data.access_token // empty')
+          if [ -z "$CSRF" ]; then
+            CSRF=$(echo "$LOGIN" | jq -r '.data.csrf_token // ""')
+          fi
+          AUTH_ARGS=()
+          if [ -n "$TOKEN" ]; then
+            AUTH_ARGS=(-H "Authorization: Bearer $TOKEN")
+          fi
 
-          ROOM=$(curl -fsS -c cookies.txt -b cookies.txt -H "X-CSRF-Token: $CSRF" \
+          ME_STATUS=$(curl -sS -o /tmp/smoke_me.json -w "%{http_code}" -c cookies.txt -b cookies.txt "${AUTH_ARGS[@]}" "$API_BASE_URL/me")
+          if [ "$ME_STATUS" -lt 200 ] || [ "$ME_STATUS" -ge 300 ]; then
+            echo "/api/me failed (status=$ME_STATUS)"
+            cat /tmp/smoke_me.json
+            exit 1
+          fi
+
+          ROOM=$(curl -sS -c cookies.txt -b cookies.txt "${AUTH_ARGS[@]}" -H "X-CSRF-Token: $CSRF" \
             -X POST "$API_BASE_URL/rooms")
+          ROOM_SUCCESS=$(echo "$ROOM" | jq -r '.success // false')
+          if [ "$ROOM_SUCCESS" != "true" ]; then
+            echo "room create failed: $ROOM"
+            exit 1
+          fi
           ROOM_ID=$(echo "$ROOM" | jq -r '.data.room.id')
           test -n "$ROOM_ID" && test "$ROOM_ID" != "null"
 
