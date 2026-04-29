@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"blackjack/backend/model"
@@ -39,6 +40,12 @@ func mapErr(err error) error {
 	}
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return ErrAlreadyExists
+	}
+	// GORM / driver が *pgconn.PgError をチェーンに載せない環境向け（一意制約など）
+	msg := err.Error()
+	if strings.Contains(msg, "23505") ||
+		strings.Contains(msg, "duplicate key value violates unique constraint") {
 		return ErrAlreadyExists
 	}
 	return err

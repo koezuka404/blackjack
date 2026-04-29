@@ -238,16 +238,31 @@ jobs:
           ORIGIN="${API_BASE_URL%/api}"
           curl -fsS "$ORIGIN/health" >/dev/null
 
-          USER="smoke_$(date +%s)"
+          # GitHub 上では RUN_ID + 乱数で衝突・並列実行を避ける（ローカル検証時は 0 相当）
+          USER="smoke_${GITHUB_RUN_ID:-0}_${RANDOM}_$(date +%s)"
           EMAIL="${USER}@smoke.local"
           PASS="password12"
-          SIGNUP=$(curl -sS -c cookies.txt -b cookies.txt -H "Content-Type: application/json" \
-            -d "{\"username\":\"$USER\",\"email\":\"$EMAIL\",\"password\":\"$PASS\"}" "$API_BASE_URL/auth/signup")
-          SIGNUP_SUCCESS=$(echo "$SIGNUP" | jq -r '.success // false')
-          if [ "$SIGNUP_SUCCESS" != "true" ]; then
-            echo "signup failed: $SIGNUP"
-            exit 1
-          fi
+          SIGNUP=""
+          for attempt in 1 2 3 4 5; do
+            rm -f cookies.txt
+            HTTP=$(curl -sS -o /tmp/smoke_signup.json -w "%{http_code}" -c cookies.txt -b cookies.txt \
+              -H "Content-Type: application/json" \
+              -d "{\"username\":\"$USER\",\"email\":\"$EMAIL\",\"password\":\"$PASS\"}" \
+              "$API_BASE_URL/auth/signup") || true
+            SIGNUP=$(cat /tmp/smoke_signup.json)
+            if [ "$HTTP" = "201" ] || [ "$HTTP" = "200" ]; then
+              SIGNUP_SUCCESS=$(echo "$SIGNUP" | jq -r '.success // false')
+              if [ "$SIGNUP_SUCCESS" = "true" ]; then
+                break
+              fi
+            fi
+            echo "signup attempt $attempt: http_status=$HTTP body=$SIGNUP"
+            if [ "$attempt" -eq 5 ]; then
+              echo "Hint: internal_error は本番の DB マイグレーション未適用・接続不良・JWT_SECRET などサーバー側要因のことがあります。ホストのログを確認してください。"
+              exit 1
+            fi
+            sleep 6
+          done
           CSRF=$(echo "$SIGNUP" | jq -r '.data.csrf_token // ""')
 
           LOGIN=$(curl -sS -c cookies.txt -b cookies.txt -H "Content-Type: application/json" \
