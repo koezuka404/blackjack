@@ -339,6 +339,33 @@ function App() {
     isInRoomRef.current = isInRoom
   }, [token, roomID, isInRoom])
 
+  const clearAuthState = () => {
+    setToken('')
+    localStorage.removeItem(TOKEN_STORAGE_KEY)
+    setUsername('')
+    setPassword('')
+    setRoomID('')
+    setRooms([])
+    setRoomState(null)
+    maintainWsConnectionRef.current = false
+    isInRoomRef.current = false
+    setIsInRoom(false)
+    setHasStartedCurrentRoom(false)
+    setHistoryJSON('')
+    setWsLog([])
+    wsReconnectAttemptRef.current = 0
+    if (wsReconnectTimerRef.current) {
+      clearTimeout(wsReconnectTimerRef.current)
+      wsReconnectTimerRef.current = null
+    }
+    clearReconnectCountdown()
+    if (wsRef.current) {
+      wsRef.current.close()
+      wsRef.current = null
+    }
+    setWsConnectionState('disconnected')
+  }
+
   const authClient = useMemo(() => {
     const client = axios.create({
       baseURL: API_BASE_URL,
@@ -353,6 +380,16 @@ function App() {
       }
       return config
     })
+    client.interceptors.response.use(
+      (response) => response,
+      (error) => {
+        if (axios.isAxiosError(error) && error.response?.status === 401) {
+          clearAuthState()
+          setStatusMessage('セッションが切れました。再ログインしてください')
+        }
+        return Promise.reject(error)
+      },
+    )
     return client
   }, [token])
 
@@ -441,32 +478,7 @@ function App() {
   const logout = async () => {
     await withStatus('ログアウト', async () => {
       await authClient.post('/auth/logout')
-      setToken('')
-      localStorage.removeItem(TOKEN_STORAGE_KEY)
-      setUsername('')
-      setPassword('')
-      setRoomID('')
-      setRooms([])
-      setRoomState(null)
-      maintainWsConnectionRef.current = false
-      isInRoomRef.current = false
-      setIsInRoom(false)
-      setHasStartedCurrentRoom(false)
-      setHistoryJSON('')
-      setWsLog([])
-      wsReconnectAttemptRef.current = 0
-
-      if (wsReconnectTimerRef.current) {
-        clearTimeout(wsReconnectTimerRef.current)
-        wsReconnectTimerRef.current = null
-      }
-      clearReconnectCountdown()
-      if (wsRef.current) {
-
-        wsRef.current.close()
-        wsRef.current = null
-      }
-
+      clearAuthState()
     })
   }
 

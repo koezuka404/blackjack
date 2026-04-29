@@ -15,10 +15,10 @@
         <mxCell id="12" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;「Signup」&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;メールパスワード／登録&lt;/font&gt;" vertex="1">
           <mxGeometry height="44" width="230" x="65" y="100" as="geometry" />
         </mxCell>
-        <mxCell id="13" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;「Auth Context」&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;Cookie 認証状態 / X-CSRF Token ヘッダー付き&lt;/font&gt;" vertex="1">
+        <mxCell id="13" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;「Auth Context」&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;JWT Bearer 管理 / Authorization: Bearer ...&lt;/font&gt;" vertex="1">
           <mxGeometry height="50" width="230" x="65" y="152" as="geometry" />
         </mxCell>
-        <mxCell id="14" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;「Logout」&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;セッション破棄・Cookie クリア&lt;/font&gt;" vertex="1">
+        <mxCell id="14" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;「Logout」&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;クライアント側トークン破棄（必要に応じ失効処理）&lt;/font&gt;" vertex="1">
           <mxGeometry height="44" width="230" x="65" y="210" as="geometry" />
         </mxCell>
         <mxCell id="15" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#333333;endArrow=open;endFill=0;strokeWidth=1.4;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" value="">
@@ -33,7 +33,7 @@
         <mxCell id="17" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;POST /api/auth/signup&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;（変形・認証不要）&lt;/font&gt;" vertex="1">
           <mxGeometry height="44" width="230" x="65" y="346" as="geometry" />
         </mxCell>
-        <mxCell id="18" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;POST /api/auth/login&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;（変形・認証不要）&lt;/font&gt;" vertex="1">
+        <mxCell id="18" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;POST /api/auth/login&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;認証不要 / JWT発行&lt;/font&gt;" vertex="1">
           <mxGeometry height="44" width="230" x="65" y="398" as="geometry" />
         </mxCell>
         <mxCell id="19" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;POST /api/auth/logout&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;（変形・Auth Middleware 適用）&lt;/font&gt;" vertex="1">
@@ -45,10 +45,10 @@
             <mxPoint x="180" y="520" as="targetPoint" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="21" parent="1" style="swimlane;startSize=22;fillColor=#FAFAFA;strokeColor=#AAAAAA;fontColor=#000000;fontStyle=1;fontSize=11;swimlaneLine=1;" value="Auth Middleware（logout のみ適用）" vertex="1">
+        <mxCell id="21" parent="1" style="swimlane;startSize=22;fillColor=#FAFAFA;strokeColor=#AAAAAA;fontColor=#000000;fontStyle=1;fontSize=11;swimlaneLine=1;" value="Auth Middleware（Bearer）" vertex="1">
           <mxGeometry height="100" width="300" x="30" y="520" as="geometry" />
         </mxCell>
-        <mxCell id="22" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;Cookie session_id 検証（Redis sess:{sessionID}）&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;CSRF Token 検証（csrf_token vs X-CSRF-Token）&lt;/font&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;未認証 → 401 / 403&lt;/font&gt;" vertex="1">
+        <mxCell id="22" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;JWT Bearer 検証（署名・期限・クレーム）&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;BearerリクエストではCSRF検証を適用しない&lt;/font&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;未認証 → 401&lt;/font&gt;" vertex="1">
           <mxGeometry height="72" width="230" x="65" y="545" as="geometry" />
         </mxCell>
         <mxCell id="23" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#333333;endArrow=open;endFill=0;strokeWidth=1.4;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" value="">
@@ -63,10 +63,10 @@
         <mxCell id="25" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;「Signup」&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;入力バリデーション / メール形式チェック&lt;/font&gt;" vertex="1">
           <mxGeometry height="58" width="230" x="65" y="662" as="geometry" />
         </mxCell>
-        <mxCell id="26" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;「Login」&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;認証確認 / session_id Cookie 発行&lt;/font&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;csrf_token Cookie 発行&lt;/font&gt;" vertex="1">
+        <mxCell id="26" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;「Login」&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;認証確認 / JWT access_token 発行&lt;/font&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;Bearer利用を前提に応答&lt;/font&gt;" vertex="1">
           <mxGeometry height="66" width="230" x="65" y="728" as="geometry" />
         </mxCell>
-        <mxCell id="27" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;「Logout」&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;セッション破棄処理 / Cookie 削除&lt;/font&gt;" vertex="1">
+        <mxCell id="27" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;「Logout」&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;トークン失効ポリシーに沿った後処理&lt;/font&gt;" vertex="1">
           <mxGeometry height="50" width="230" x="65" y="802" as="geometry" />
         </mxCell>
         <mxCell id="28" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F0F0FF;strokeColor=#555599;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;dashed=1;dashPattern=6 3;strokeWidth=1.5;" value="&lt;font style=&quot;font-size:9px;&quot;&gt;«interface»&lt;/font&gt;&lt;br/&gt;&lt;b&gt;UsecaseInputPort&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:9px;&quot;&gt;Signup(email,pw) / Login(email,pw) / Logout(sessionID)&lt;/font&gt;" vertex="1">
@@ -78,10 +78,10 @@
         <mxCell id="31" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;SignupUsecase&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;メール重複チェック / bcrypt ハッシュ化&lt;/font&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;users テーブルへ INSERT&lt;/font&gt;" vertex="1">
           <mxGeometry height="58" width="220" x="400" y="790" as="geometry" />
         </mxCell>
-        <mxCell id="32" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;LoginUsecase&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;メール検索・bcrypt 照合&lt;/font&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;Redis session 保存 (SETEX TTL 24h)&lt;/font&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;CSRF トークン生成&lt;/font&gt;" vertex="1">
+        <mxCell id="32" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;LoginUsecase&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;メール検索・bcrypt 照合&lt;/font&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;JWT発行（署名: JWT_SECRET）&lt;/font&gt;" vertex="1">
           <mxGeometry height="70" width="220" x="400" y="856" as="geometry" />
         </mxCell>
-        <mxCell id="33" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;LogoutUsecase&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;Redis sess:{sessionID} 削除 / Cookie 破棄&lt;/font&gt;" vertex="1">
+        <mxCell id="33" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;LogoutUsecase&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;JWT運用ポリシーに基づく失効処理&lt;/font&gt;" vertex="1">
           <mxGeometry height="48" width="220" x="400" y="934" as="geometry" />
         </mxCell>
         <mxCell id="34" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#5555AA;endArrow=block;endFill=0;strokeWidth=1.4;dashed=1;dashPattern=6 3;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" value="">
@@ -90,7 +90,7 @@
             <mxPoint x="510" y="744" as="targetPoint" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="35" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F0F0FF;strokeColor=#555599;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;dashed=1;dashPattern=6 3;strokeWidth=1.5;" value="&lt;font style=&quot;font-size:9px;&quot;&gt;«interface»&lt;/font&gt;&lt;br/&gt;&lt;b&gt;RepositoryPort&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:9px;&quot;&gt;UserRepository: FindByEmail / Create UserSessionRepository: Save / Find / Delete RateLimitRepository: Check / Increment&lt;/font&gt;" vertex="1">
+        <mxCell id="35" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F0F0FF;strokeColor=#555599;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;dashed=1;dashPattern=6 3;strokeWidth=1.5;" value="&lt;font style=&quot;font-size:9px;&quot;&gt;«interface»&lt;/font&gt;&lt;br/&gt;&lt;b&gt;RepositoryPort&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:9px;&quot;&gt;UserRepository / RoomRepository / SessionRepository / ActionLogRepository / RateLimitRepository&lt;/font&gt;" vertex="1">
           <mxGeometry height="110" width="260" x="380" y="1002" as="geometry" />
         </mxCell>
         <mxCell id="36" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#333333;endArrow=open;endFill=0;strokeWidth=1.4;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" value="">
@@ -102,10 +102,10 @@
         <mxCell id="37" parent="1" style="swimlane;startSize=22;fillColor=#FAFAFA;strokeColor=#AAAAAA;fontColor=#000000;fontStyle=1;fontSize=11;swimlaneLine=1;" value="Entities" vertex="1">
           <mxGeometry height="220" width="390" x="670" y="634" as="geometry" />
         </mxCell>
-        <mxCell id="40" parent="37" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFDE7;strokeColor=#CCAA00;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;Cookie&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;session_id (HttpOnly)&lt;/font&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;csrf_token&lt;/font&gt;" vertex="1">
+        <mxCell id="40" parent="37" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFDE7;strokeColor=#CCAA00;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;WebSocket Auth&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;接続後 AUTH イベント必須&lt;/font&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;Bearerトークンで認証完了&lt;/font&gt;" vertex="1">
           <mxGeometry height="100" width="120" x="260" y="30" as="geometry" />
         </mxCell>
-        <mxCell id="39" parent="37" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFDE7;strokeColor=#CCAA00;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;UserSession&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;key: sess:{sessionID}&lt;/font&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;value: userID&lt;/font&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;TTL: 24h&lt;/font&gt;" vertex="1">
+        <mxCell id="39" parent="37" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFDE7;strokeColor=#CCAA00;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;JWT Claims&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;sub(user_id) / exp / iat&lt;/font&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;署名検証は middleware で実施&lt;/font&gt;" vertex="1">
           <mxGeometry height="100" width="120" x="130" y="30" as="geometry" />
         </mxCell>
         <mxCell id="38" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFDE7;strokeColor=#CCAA00;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;User&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;id&lt;/font&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;email&lt;/font&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;password_hash&lt;/font&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;created_at&lt;/font&gt;" vertex="1">
@@ -117,7 +117,7 @@
         <mxCell id="43" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;UserRepository&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;FindByEmail / Create&lt;/font&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;→ PostgreSQL（users テーブル）&lt;/font&gt;" vertex="1">
           <mxGeometry height="58" width="230" x="65" y="1180" as="geometry" />
         </mxCell>
-        <mxCell id="44" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;UserSessionRepository&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;Save (SETEX TTL 24h) / FindBySessionID / Delete&lt;/font&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;→ Redis（sess:{sessionID}）&lt;/font&gt;" vertex="1">
+        <mxCell id="44" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;SessionRepository&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;game_sessions / player_states / dealer_states&lt;/font&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;→ PostgreSQL（正本）&lt;/font&gt;" vertex="1">
           <mxGeometry height="66" width="230" x="65" y="1246" as="geometry" />
         </mxCell>
         <mxCell id="45" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;RateLimitRepository&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;Game API 呼び出し制限（User 毎）&lt;/font&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;→ Redis（ratelimit:{userID}）&lt;/font&gt;" vertex="1">
@@ -145,7 +145,7 @@
         <mxCell id="49" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;PostgreSQL&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;id / email / password_hash / created_at&lt;/font&gt;" vertex="1">
           <mxGeometry height="56" width="230" x="65" y="1434" as="geometry" />
         </mxCell>
-        <mxCell id="50" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;Redis（セッション管理）&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;sess:{sessionID} → userID&lt;/font&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;TTL 24時間（SETEX TTL 24h で設定済）&lt;/font&gt;" vertex="1">
+        <mxCell id="50" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#333333;fontColor=#000000;fontSize=11;align=center;verticalAlign=middle;strokeWidth=1;" value="&lt;b&gt;Redis（補助）&lt;/b&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;RateLimit / WS epoch / PubSub 補助&lt;/font&gt;&lt;br/&gt;&lt;font style=&quot;font-size:10px;&quot;&gt;ゲーム状態の正本は保持しない&lt;/font&gt;" vertex="1">
           <mxGeometry height="66" width="230" x="65" y="1500" as="geometry" />
         </mxCell>
         <mxCell id="SpaqO0Pxm60D8fOGq1lD-57" edge="1" parent="1" style="endArrow=classic;html=1;rounded=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="28" value="">
