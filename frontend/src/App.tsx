@@ -396,7 +396,11 @@ function App() {
   }, [token])
 
   useEffect(() => {
-    const interceptorID = authClient.interceptors.response.use(
+    const responseInterceptors = authClient.interceptors?.response
+    if (!responseInterceptors || typeof responseInterceptors.use !== 'function') {
+      return
+    }
+    const interceptorID = responseInterceptors.use(
       (response) => response,
       (error) => {
         if (axios.isAxiosError(error) && error.response?.status === 401) {
@@ -407,7 +411,9 @@ function App() {
       },
     )
     return () => {
-      authClient.interceptors.response.eject(interceptorID)
+      if (typeof responseInterceptors.eject === 'function') {
+        responseInterceptors.eject(interceptorID)
+      }
     }
   }, [authClient, clearAuthState])
 
