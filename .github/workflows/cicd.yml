@@ -218,10 +218,30 @@ jobs:
           tags: ${{ steps.meta_frontend.outputs.tags }}
           labels: ${{ steps.meta_frontend.outputs.labels }}
 
+  # スモークより先に本番 DB をマイグレーションしないと、未適用スキーマで signup が 500 になり deploy まで届かない（デッドロック）になる。
+  production-migrate:
+    name: Migrate Production DB (before smoke)
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    needs: [publish-images]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Execute migration (production)
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        run: go run ./migrations/migrate.go
+
   smoke-test:
     name: Smoke Test (API)
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
-    needs: [container-build, security-scan, publish-images]
+    needs: [container-build, security-scan, publish-images, production-migrate]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -258,7 +278,10 @@ jobs:
             fi
             echo "signup attempt $attempt: http_status=$HTTP body=$SIGNUP"
             if [ "$attempt" -eq 5 ]; then
-              echo "Hint: internal_error は本番の DB マイグレーション未適用・接続不良・JWT_SECRET などサーバー側要因のことがあります。ホストのログを確認してください。"
+              echo "--- GET $ORIGIN/health (diagnostic) ---"
+              curl -sS "$ORIGIN/health" || true
+              echo
+              echo "Hint: マイグレーションは production-migrate ジョブで先に実行されます。まだ 500 のときは Render 等のログで「signup internal error:」を確認してください。"
               exit 1
             fi
             sleep 6

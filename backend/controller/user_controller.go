@@ -53,6 +53,7 @@ func (a *AuthController) Signup(c echo.Context) error {
 		case errors.Is(err, usecase.ErrUsernameTaken), errors.Is(err, usecase.ErrEmailTaken):
 			return c.JSON(http.StatusConflict, dto.Fail("email_taken", "ユーザー名またはメールアドレスは既に使われています"))
 		default:
+			c.Logger().Errorf("signup internal error: %v", err)
 			return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", "サーバーエラーが発生しました"))
 		}
 	}

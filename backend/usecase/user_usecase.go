@@ -103,7 +103,7 @@ func (u *authService) Signup(ctx context.Context, username, email, password stri
 	if err := u.store.Transaction(ctx, func(tx repository.Store) error {
 		return tx.CreateUser(ctx, user)
 	}); err != nil {
-		if err == repository.ErrAlreadyExists {
+		if errors.Is(err, repository.ErrAlreadyExists) {
 			return nil, ErrEmailTaken
 		}
 		return nil, err
