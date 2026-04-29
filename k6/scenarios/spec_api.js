@@ -11,6 +11,7 @@ const vus = Number(__ENV.K6_VUS || 100);
 export const options = {
   vus,
   duration: __ENV.K6_DURATION || '5m',
+  setupTimeout: __ENV.K6_SETUP_TIMEOUT || '5m',
   thresholds: {
     http_req_failed: ['rate<0.05'],
     http_req_duration: ['p(95)<1500'],
