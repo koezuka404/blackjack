@@ -286,10 +286,11 @@ jobs:
           fi
 
           WS_URL="${ORIGIN/http/ws}/ws/rooms/$ROOM_ID"
-          WS_URL="$WS_URL" COOKIE_FILE="cookies.txt" node <<'NODE'
+          WS_URL="$WS_URL" COOKIE_FILE="cookies.txt" TOKEN="$TOKEN" node <<'NODE'
           const fs = require('fs');
           const WebSocket = require('ws');
           const wsUrl = process.env.WS_URL;
+          const token = process.env.TOKEN || '';
           const cookieLines = fs.readFileSync(process.env.COOKIE_FILE, 'utf8')
             .split('\n')
             .filter((l) => l && !l.startsWith('#'));
@@ -299,6 +300,19 @@ jobs:
           }).join('; ');
           const ws = new WebSocket(wsUrl, { headers: { Cookie: cookie } });
           const timer = setTimeout(() => { process.exit(1); }, 10000);
+          ws.on('open', () => {
+            if (token) {
+              ws.send(JSON.stringify({
+                type: 'AUTH',
+                request_id: `smoke-auth-${Date.now()}`,
+                access_token: token,
+              }));
+            }
+            ws.send(JSON.stringify({
+              type: 'ROOM_SYNC_REQUEST',
+              request_id: `smoke-sync-${Date.now()}`,
+            }));
+          });
           ws.on('message', (msg) => {
             try {
               const data = JSON.parse(String(msg));
