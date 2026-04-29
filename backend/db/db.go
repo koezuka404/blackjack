@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"time"
 
 	"gorm.io/driver/postgres"
@@ -27,9 +29,39 @@ func sqlDBFromGorm(gdb *gorm.DB) (sqlDB *sql.DB, err error) {
 }
 
 func configureSQLDB(sqlDB *sql.DB) {
-	sqlDB.SetMaxIdleConns(5)
-	sqlDB.SetMaxOpenConns(20)
-	sqlDB.SetConnMaxLifetime(time.Hour)
+	maxIdle := intFromEnv("DB_MAX_IDLE_CONNS", 20)
+	maxOpen := intFromEnv("DB_MAX_OPEN_CONNS", 80)
+	connMaxLifetime := durationFromEnv("DB_CONN_MAX_LIFETIME", 30*time.Minute)
+	connMaxIdleTime := durationFromEnv("DB_CONN_MAX_IDLE_TIME", 5*time.Minute)
+
+	sqlDB.SetMaxIdleConns(maxIdle)
+	sqlDB.SetMaxOpenConns(maxOpen)
+	sqlDB.SetConnMaxLifetime(connMaxLifetime)
+	sqlDB.SetConnMaxIdleTime(connMaxIdleTime)
+}
+
+func intFromEnv(key string, fallback int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return fallback
+	}
+	return n
+}
+
+func durationFromEnv(key string, fallback time.Duration) time.Duration {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		return fallback
+	}
+	return d
 }
 
 func Open(dsn string) (*gorm.DB, error) {

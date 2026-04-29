@@ -47,24 +47,28 @@ export default function () {
     });
   }
 
-  const loginRes = http.post(
-    `${apiBase}/auth/login`,
-    JSON.stringify({ username: vuUsername, password }),
-    { headers: { 'Content-Type': 'application/json' }, tags: { endpoint: 'login' } },
-  );
-  const loginOk = check(loginRes, {
-    'login status is 200': (r) => r.status === 200,
-    'login has token': (r) => {
-      try {
-        const payload = r.json();
-        return Boolean(payload?.data?.access_token);
-      } catch (_) {
-        return false;
-      }
-    },
-  });
+  if (!vuToken) {
+    const loginRes = http.post(
+      `${apiBase}/auth/login`,
+      JSON.stringify({ username: vuUsername, password }),
+      { headers: { 'Content-Type': 'application/json' }, tags: { endpoint: 'login' } },
+    );
+    const loginOk = check(loginRes, {
+      'login status is 200': (r) => r.status === 200,
+      'login has token': (r) => {
+        try {
+          const payload = r.json();
+          return Boolean(payload?.data?.access_token);
+        } catch (_) {
+          return false;
+        }
+      },
+    });
 
-  if (loginOk && !vuToken) {
+    if (!loginOk) {
+      sleep(1);
+      return;
+    }
     vuToken = loginRes.json('data.access_token');
   }
 
