@@ -86,8 +86,8 @@ export function resolveApiBaseURL(): string {
   const raw = import.meta.env.VITE_API_BASE_URL
 
   if (typeof raw === 'string' && raw.trim() !== '') {
-
-    return raw.trim()
+    const base = raw.trim().replace(/\/+$/, '')
+    return base.endsWith('/api') ? base : `${base}/api`
   }
   if (typeof window !== 'undefined' && window.location?.origin) {
     return `${window.location.origin}/api`
@@ -101,8 +101,8 @@ export function resolveWsBaseURL(): string {
   const raw = import.meta.env.VITE_WS_BASE_URL
 
   if (typeof raw === 'string' && raw.trim() !== '') {
-
-    return raw.trim()
+    const base = raw.trim().replace(/\/+$/, '')
+    return base.endsWith('/ws') ? base : `${base}/ws`
   }
   if (typeof window !== 'undefined' && window.location) {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'

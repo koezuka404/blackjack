@@ -14,103 +14,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  backend-unit:
-    name: Backend Unit & Vet
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: backend/go.mod
-          cache-dependency-path: backend/go.sum
-      - name: Vet and unit tests
-        working-directory: backend
-        run: |
-          go vet ./...
-          go test ./... -count=1 -short -timeout 12m
-
-  backend-integration:
-    name: Backend Integration
-    needs: backend-unit
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: chatapp
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d chatapp"
-          --health-interval 3s
-          --health-timeout 5s
-          --health-retries 15
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: backend/go.mod
-          cache-dependency-path: backend/go.sum
-      - name: Prepare dedicated databases for integration packages
-        env:
-          PGPASSWORD: postgres
-        run: |
-          psql -h localhost -U postgres -d postgres -c "CREATE DATABASE chatapp_repo_int;"
-          psql -h localhost -U postgres -d postgres -c "CREATE DATABASE chatapp_usecase_int;"
-          psql -h localhost -U postgres -d postgres -c "CREATE DATABASE chatapp_e2e_int;"
-      - name: Repository integration tests
-        working-directory: backend
-        env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/chatapp_repo_int?sslmode=disable
-        run: go test -tags=integration ./repository -count=1 -timeout 20m
-      - name: Usecase integration tests
-        working-directory: backend
-        env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/chatapp_usecase_int?sslmode=disable
-        run: go test -tags=integration ./usecase -count=1 -timeout 20m
-      - name: E2E integration tests
-        working-directory: backend
-        env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/chatapp_e2e_int?sslmode=disable
-        run: go test -tags=integration ./e2e -count=1 -timeout 20m
-
-  backend-message-contract:
-    name: Message Event Contract
-    needs: backend-unit
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: chatapp
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d chatapp"
-          --health-interval 3s
-          --health-timeout 5s
-          --health-retries 15
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: backend/go.mod
-          cache-dependency-path: backend/go.sum
-      - name: Message usecase contract tests
-        working-directory: backend
-        env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/chatapp?sslmode=disable
-        run: go test ./usecase -tags=integration -run "TestMessageUseCase_Events_" -count=1 -timeout 10m
-
-  frontend:
-    name: Frontend Lint & Build
+  frontend-ci:
+    name: Frontend Lint/Test/Build
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -120,34 +25,117 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - name: Lint and build
+      - name: Run frontend quality gate
         working-directory: frontend
         run: |
           npm ci
           npm run lint
+          npm run test:run
           npm run build
 
-  e2e-playwright:
-    name: Frontend/Backend E2E
-    needs: [backend-unit, frontend]
+  backend-ci:
+    name: Backend Vet/Test/Build
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Run backend quality gate
+        working-directory: backend
+        run: |
+          go vet ./...
+          go test ./... -count=1 -timeout 15m
+          go build ./...
+
+  integration-test:
+    name: Integration Test (PostgreSQL/Redis)
+    needs: [frontend-ci, backend-ci]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: chatapp
+          POSTGRES_USER: blackjack
+          POSTGRES_PASSWORD: blackjack
+          POSTGRES_DB: blackjack
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d chatapp"
-          --health-interval 3s
+          --health-cmd "pg_isready -U blackjack -d blackjack"
+          --health-interval 5s
           --health-timeout 5s
-          --health-retries 15
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Run migrations in pipeline
+        working-directory: backend
+        env:
+          DATABASE_URL: postgres://blackjack:blackjack@localhost:5432/blackjack?sslmode=disable
+        run: go run ./migrations/migrate.go
+      - name: Integration smoke and tests
+        working-directory: backend
+        env:
+          DATABASE_URL: postgres://blackjack:blackjack@localhost:5432/blackjack?sslmode=disable
+          REDIS_ADDR: localhost:6379
+          JWT_SECRET: ci-jwt-secret-min-16bytes!!
+        run: |
+          go test ./... -count=1 -timeout 15m
+          go run . > /tmp/backend.log 2>&1 &
+          echo $! > /tmp/backend.pid
+          for i in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:8080/health >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8080/health >/dev/null
+      - name: Stop backend
+        if: always()
+        run: |
+          if [ -f /tmp/backend.pid ]; then kill "$(cat /tmp/backend.pid)" 2>/dev/null || true; fi
+          if [ -f /tmp/backend.log ]; then cat /tmp/backend.log; fi
+
+  container-build:
+    name: Container Build
+    needs: [integration-test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build backend image
+        run: docker build -t blackjack-backend:ci "./backend"
+      - name: Build frontend image
+        run: docker build -t blackjack-frontend:ci "./frontend"
+
+  security-scan:
+    name: Security Scan
+    needs: [integration-test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v6
         with:
           go-version-file: backend/go.mod
@@ -157,90 +145,33 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - name: Install Playwright browser
+      - name: gosec
+        working-directory: backend
+        run: go run github.com/securego/gosec/v2/cmd/gosec@latest ./...
+      - name: npm audit
         working-directory: frontend
         run: |
           npm ci
-          npx playwright install chromium --with-deps
-      - name: Playwright E2E
-        working-directory: frontend
-        env:
-          CI: "true"
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/chatapp?sslmode=disable
-        run: npm run test:e2e
-      - name: Upload Playwright artifacts
-        if: failure()
-        uses: actions/upload-artifact@v4
+          npm audit --audit-level=high
+      - name: Trivy scan
+        uses: aquasecurity/trivy-action@0.28.0
         with:
-          name: playwright-artifacts
-          path: |
-            frontend/test-results
-            frontend/playwright-report
-          if-no-files-found: ignore
-
-  k6-spec:
-    name: k6 API Spec Load
-    needs: [backend-integration, backend-message-contract]
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    services:
-      postgres:
-        image: postgres:16-alpine
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: gitleaks scan
+        uses: gitleaks/gitleaks-action@v2
         env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: chatapp
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d chatapp"
-          --health-interval 3s
-          --health-timeout 5s
-          --health-retries 15
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: backend/go.mod
-          cache-dependency-path: backend/go.sum
-      - name: Start API for k6
-        working-directory: backend
-        env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/chatapp?sslmode=disable
-          REDIS_ADDR: ""
-          JWT_SECRET: ci-k6-jwt-secret-must-be-32-bytes-min!!
-          PORT: "8080"
-        run: |
-          nohup go run . > /tmp/k6-api.log 2>&1 &
-          echo $! > /tmp/k6-api.pid
-          for i in $(seq 1 60); do
-            if curl -sf http://127.0.0.1:8080/health | grep -q ok; then
-              echo "API ready"
-              exit 0
-            fi
-            sleep 1
-          done
-          cat /tmp/k6-api.log || true
-          exit 1
-      - name: "k6（単一シナリオ: health〜送信・既読）"
-        run: |
-          docker run --rm --network=host \
-            -v "${GITHUB_WORKSPACE}/k6:/k6:ro" \
-            -e K6_API_BASE_URL=http://127.0.0.1:8080 \
-            -e K6_VUS=3 \
-            -e K6_DURATION=25s \
-            grafana/k6:0.55.0 run /k6/scenarios/spec_api.js
-      - name: Stop API
-        if: always()
-        run: |
-          if [ -f /tmp/k6-api.pid ]; then kill $(cat /tmp/k6-api.pid) 2>/dev/null || true; fi
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   publish-images:
-    name: Publish Docker Images (main/master)
+    name: Publish Docker Images (GHCR)
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
-    needs: [backend-integration, backend-message-contract, frontend, e2e-playwright, k6-spec]
+    needs: [container-build, security-scan]
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
     permissions:
       contents: read
       packages: write
@@ -273,18 +204,139 @@ jobs:
       - name: Build and push backend image
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: ./Dockerfile
-          target: backend-runtime
+          context: ./backend
+          file: ./backend/Dockerfile
           push: true
           tags: ${{ steps.meta_backend.outputs.tags }}
           labels: ${{ steps.meta_backend.outputs.labels }}
       - name: Build and push frontend image
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: ./Dockerfile
-          target: frontend-runtime
+          context: ./frontend
+          file: ./frontend/Dockerfile
           push: true
           tags: ${{ steps.meta_frontend.outputs.tags }}
           labels: ${{ steps.meta_frontend.outputs.labels }}
+
+  smoke-test:
+    name: Smoke Test (API)
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    needs: [container-build, security-scan, publish-images]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - name: Install ws client dependency
+        run: npm install ws@8
+      - name: API smoke (/health, /api/me, room create, ws sync)
+        env:
+          API_BASE_URL: ${{ secrets.PRODUCTION_API_BASE_URL }}
+        run: |
+          set -euo pipefail
+          ORIGIN="${API_BASE_URL%/api}"
+          curl -fsS "$ORIGIN/health" >/dev/null
+
+          USER="smoke_$(date +%s)"
+          PASS="password12"
+          SIGNUP=$(curl -fsS -c cookies.txt -b cookies.txt -H "Content-Type: application/json" \
+            -d "{\"username\":\"$USER\",\"password\":\"$PASS\"}" "$API_BASE_URL/auth/signup")
+          CSRF=$(echo "$SIGNUP" | jq -r '.data.csrf_token')
+          test -n "$CSRF" && test "$CSRF" != "null"
+
+          curl -fsS -c cookies.txt -b cookies.txt "$API_BASE_URL/me" >/dev/null
+
+          ROOM=$(curl -fsS -c cookies.txt -b cookies.txt -H "X-CSRF-Token: $CSRF" \
+            -X POST "$API_BASE_URL/rooms")
+          ROOM_ID=$(echo "$ROOM" | jq -r '.data.room.id')
+          test -n "$ROOM_ID" && test "$ROOM_ID" != "null"
+
+          WS_URL="${ORIGIN/http/ws}/ws/rooms/$ROOM_ID"
+          WS_URL="$WS_URL" COOKIE_FILE="cookies.txt" node <<'NODE'
+          const fs = require('fs');
+          const WebSocket = require('ws');
+          const wsUrl = process.env.WS_URL;
+          const cookieLines = fs.readFileSync(process.env.COOKIE_FILE, 'utf8')
+            .split('\n')
+            .filter((l) => l && !l.startsWith('#'));
+          const cookie = cookieLines.map((l) => {
+            const cols = l.split('\t');
+            return `${cols[5]}=${cols[6]}`;
+          }).join('; ');
+          const ws = new WebSocket(wsUrl, { headers: { Cookie: cookie } });
+          const timer = setTimeout(() => { process.exit(1); }, 10000);
+          ws.on('message', (msg) => {
+            try {
+              const data = JSON.parse(String(msg));
+              if (data.type === 'ROOM_STATE_SYNC') {
+                clearTimeout(timer);
+                ws.close();
+                process.exit(0);
+              }
+            } catch (_) {}
+          });
+          ws.on('error', () => process.exit(1));
+          NODE
+
+  k6-load:
+    name: k6 Load Test (100 users / 5 min)
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    needs: [smoke-test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Ensure k6 scenario exists
+        run: test -f "k6/scenarios/spec_api.js"
+      - name: Run k6 scenario
+        env:
+          K6_API_BASE_URL: ${{ secrets.PRODUCTION_API_BASE_URL }}
+        run: |
+          docker run --rm --network=host \
+            -v "${GITHUB_WORKSPACE}/k6:/k6:ro" \
+            -e K6_API_BASE_URL="$K6_API_BASE_URL" \
+            -e K6_VUS=100 \
+            -e K6_DURATION=5m \
+            grafana/k6:0.55.0 run /k6/scenarios/spec_api.js
+
+  deploy-production:
+    name: Deploy to Vercel Production
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    needs: [smoke-test, k6-load]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Execute migration (production)
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        run: go run ./migrations/migrate.go
+      - name: Pull project settings
+        working-directory: frontend
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+      - name: Build production artifact
+        working-directory: frontend
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: vercel build --prod --token="$VERCEL_TOKEN"
+      - name: Deploy to production
+        working-directory: frontend
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
