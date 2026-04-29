@@ -230,7 +230,7 @@ jobs:
           node-version: "22"
       - name: Install ws client dependency
         run: npm install ws@8
-      - name: API smoke (/health, /api/me, room create, ws sync)
+      - name: API smoke (/health, /api/me, room create+join, ws sync)
         env:
           API_BASE_URL: ${{ secrets.PRODUCTION_API_BASE_URL }}
         run: |
@@ -276,6 +276,14 @@ jobs:
           fi
           ROOM_ID=$(echo "$ROOM" | jq -r '.data.room.id')
           test -n "$ROOM_ID" && test "$ROOM_ID" != "null"
+
+          JOIN=$(curl -sS -c cookies.txt -b cookies.txt "${AUTH_ARGS[@]}" -H "X-CSRF-Token: $CSRF" \
+            -X POST "$API_BASE_URL/rooms/$ROOM_ID/join")
+          JOIN_SUCCESS=$(echo "$JOIN" | jq -r '.success // false')
+          if [ "$JOIN_SUCCESS" != "true" ]; then
+            echo "room join failed: $JOIN"
+            exit 1
+          fi
 
           WS_URL="${ORIGIN/http/ws}/ws/rooms/$ROOM_ID"
           WS_URL="$WS_URL" COOKIE_FILE="cookies.txt" node <<'NODE'
