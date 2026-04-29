@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, ReactElement } from 'react'
 import axios, { AxiosError } from 'axios'
 import './App.css'
@@ -339,7 +339,19 @@ function App() {
     isInRoomRef.current = isInRoom
   }, [token, roomID, isInRoom])
 
-  const clearAuthState = () => {
+  const clearReconnectCountdown = useCallback(() => {
+
+    wsReconnectDeadlineRef.current = null
+    if (wsReconnectDisplayIntervalRef.current) {
+      clearInterval(wsReconnectDisplayIntervalRef.current)
+      wsReconnectDisplayIntervalRef.current = null
+    }
+    setWsReconnectRemainingSec(0)
+    setWsReconnectBannerVisible(false)
+
+  }, [])
+
+  const clearAuthState = useCallback(() => {
     setToken('')
     localStorage.removeItem(TOKEN_STORAGE_KEY)
     setUsername('')
@@ -364,7 +376,7 @@ function App() {
       wsRef.current = null
     }
     setWsConnectionState('disconnected')
-  }
+  }, [clearReconnectCountdown])
 
   const authClient = useMemo(() => {
     const client = axios.create({
@@ -380,7 +392,11 @@ function App() {
       }
       return config
     })
-    client.interceptors.response.use(
+    return client
+  }, [token])
+
+  useEffect(() => {
+    const interceptorID = authClient.interceptors.response.use(
       (response) => response,
       (error) => {
         if (axios.isAxiosError(error) && error.response?.status === 401) {
@@ -390,23 +406,13 @@ function App() {
         return Promise.reject(error)
       },
     )
-    return client
-  }, [token])
+    return () => {
+      authClient.interceptors.response.eject(interceptorID)
+    }
+  }, [authClient, clearAuthState])
 
   const appendWSLog = (message: string) => {
     setWsLog((prev) => [`${new Date().toISOString()} ${message}`, ...prev].slice(0, 60))
-  }
-
-  const clearReconnectCountdown = () => {
-
-    wsReconnectDeadlineRef.current = null
-    if (wsReconnectDisplayIntervalRef.current) {
-      clearInterval(wsReconnectDisplayIntervalRef.current)
-      wsReconnectDisplayIntervalRef.current = null
-    }
-    setWsReconnectRemainingSec(0)
-    setWsReconnectBannerVisible(false)
-
   }
 
   const startReconnectCountdown = (delayMs: number) => {
@@ -713,7 +719,7 @@ function App() {
 
       clearReconnectCountdown()
     }
-  }, [])
+  }, [clearReconnectCountdown])
 
   useEffect(() => {
     if (wsConnectionState !== 'connected') {
