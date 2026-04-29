@@ -27,21 +27,21 @@ func (a authResponseStub) ExpiresAt() time.Time { return a.exp }
 func (a authResponseStub) User() *model.User    { return a.user }
 
 type authUsecaseStub struct {
-	signupFn func(context.Context, string, string) (usecase.AuthResponse, error)
+	signupFn func(context.Context, string, string, string) (usecase.AuthResponse, error)
 	loginFn  func(context.Context, string, string) (usecase.AuthResponse, error)
 	logoutFn func(context.Context) error
 	meFn     func(context.Context, string) (*model.User, error)
 }
 
-func (a authUsecaseStub) Signup(ctx context.Context, username, password string) (usecase.AuthResponse, error) {
+func (a authUsecaseStub) Signup(ctx context.Context, username, email, password string) (usecase.AuthResponse, error) {
 	if a.signupFn != nil {
-		return a.signupFn(ctx, username, password)
+		return a.signupFn(ctx, username, email, password)
 	}
 	return nil, nil
 }
-func (a authUsecaseStub) Login(ctx context.Context, username, password string) (usecase.AuthResponse, error) {
+func (a authUsecaseStub) Login(ctx context.Context, email, password string) (usecase.AuthResponse, error) {
 	if a.loginFn != nil {
-		return a.loginFn(ctx, username, password)
+		return a.loginFn(ctx, email, password)
 	}
 	return nil, nil
 }
@@ -79,14 +79,15 @@ func TestAuthController_Signup_StatusBranches(t *testing.T) {
 	t.Run("201 success", func(t *testing.T) {
 		c, rec := newJSONContext(t, http.MethodPost, "/api/auth/signup", map[string]any{
 			"username": "alice",
+			"email":    "alice@example.com",
 			"password": "password12",
 		})
 		ctrl := NewAuthController(authUsecaseStub{
-			signupFn: func(context.Context, string, string) (usecase.AuthResponse, error) {
+			signupFn: func(context.Context, string, string, string) (usecase.AuthResponse, error) {
 				return authResponseStub{
 					token: "tok",
 					exp:   time.Now().Add(time.Hour),
-					user:  &model.User{ID: "u1", Username: "alice"},
+					user:  &model.User{ID: "u1", Username: "alice", Email: "alice@example.com"},
 				}, nil
 			},
 		})
@@ -101,6 +102,7 @@ func TestAuthController_Signup_StatusBranches(t *testing.T) {
 	t.Run("400 bad request bind/empty", func(t *testing.T) {
 		c, rec := newJSONContext(t, http.MethodPost, "/api/auth/signup", map[string]any{
 			"username": "",
+			"email":    "",
 			"password": "",
 		})
 		ctrl := NewAuthController(authUsecaseStub{})
@@ -113,10 +115,11 @@ func TestAuthController_Signup_StatusBranches(t *testing.T) {
 	t.Run("400 invalid input from usecase", func(t *testing.T) {
 		c, rec := newJSONContext(t, http.MethodPost, "/api/auth/signup", map[string]any{
 			"username": "ab",
+			"email":    "bad",
 			"password": "short",
 		})
 		ctrl := NewAuthController(authUsecaseStub{
-			signupFn: func(context.Context, string, string) (usecase.AuthResponse, error) {
+			signupFn: func(context.Context, string, string, string) (usecase.AuthResponse, error) {
 				return nil, usecase.ErrInvalidInput
 			},
 		})
@@ -129,11 +132,12 @@ func TestAuthController_Signup_StatusBranches(t *testing.T) {
 	t.Run("409 username taken", func(t *testing.T) {
 		c, rec := newJSONContext(t, http.MethodPost, "/api/auth/signup", map[string]any{
 			"username": "alice",
+			"email":    "alice@example.com",
 			"password": "password12",
 		})
 		ctrl := NewAuthController(authUsecaseStub{
-			signupFn: func(context.Context, string, string) (usecase.AuthResponse, error) {
-				return nil, usecase.ErrUsernameTaken
+			signupFn: func(context.Context, string, string, string) (usecase.AuthResponse, error) {
+				return nil, usecase.ErrEmailTaken
 			},
 		})
 		_ = ctrl.Signup(c)
@@ -146,7 +150,7 @@ func TestAuthController_Signup_StatusBranches(t *testing.T) {
 func TestAuthController_LoginAndMe_StatusBranches(t *testing.T) {
 	t.Run("login 400 invalid payload", func(t *testing.T) {
 		c, rec := newJSONContext(t, http.MethodPost, "/api/auth/login", map[string]any{
-			"username": "",
+			"email":    "",
 			"password": "",
 		})
 		ctrl := NewAuthController(authUsecaseStub{})
@@ -158,7 +162,7 @@ func TestAuthController_LoginAndMe_StatusBranches(t *testing.T) {
 
 	t.Run("login 401 unauthorized", func(t *testing.T) {
 		c, rec := newJSONContext(t, http.MethodPost, "/api/auth/login", map[string]any{
-			"username": "alice",
+			"email":    "alice@example.com",
 			"password": "wrong",
 		})
 		ctrl := NewAuthController(authUsecaseStub{
@@ -174,7 +178,7 @@ func TestAuthController_LoginAndMe_StatusBranches(t *testing.T) {
 
 	t.Run("login 200 success", func(t *testing.T) {
 		c, rec := newJSONContext(t, http.MethodPost, "/api/auth/login", map[string]any{
-			"username": "alice",
+			"email":    "alice@example.com",
 			"password": "password12",
 		})
 		ctrl := NewAuthController(authUsecaseStub{
@@ -182,7 +186,7 @@ func TestAuthController_LoginAndMe_StatusBranches(t *testing.T) {
 				return authResponseStub{
 					token: "tok",
 					exp:   time.Now().Add(time.Hour),
-					user:  &model.User{ID: "u1", Username: "alice"},
+					user:  &model.User{ID: "u1", Username: "alice", Email: "alice@example.com"},
 				}, nil
 			},
 		})
@@ -206,7 +210,7 @@ func TestAuthController_LoginAndMe_StatusBranches(t *testing.T) {
 		c.Set("user_id", "u1")
 		ctrl := NewAuthController(authUsecaseStub{
 			meFn: func(context.Context, string) (*model.User, error) {
-				return &model.User{ID: "u1", Username: "alice"}, nil
+				return &model.User{ID: "u1", Username: "alice", Email: "alice@example.com"}, nil
 			},
 		})
 		_ = ctrl.Me(c)

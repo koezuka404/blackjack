@@ -12,8 +12,10 @@ import (
 
 type authUsecaseStub struct{}
 
-func (authUsecaseStub) Signup(context.Context, string, string) (usecase.AuthResponse, error) { return nil, nil }
-func (authUsecaseStub) Login(context.Context, string, string) (usecase.AuthResponse, error)  { return nil, nil }
+func (authUsecaseStub) Signup(context.Context, string, string, string) (usecase.AuthResponse, error) {
+	return nil, nil
+}
+func (authUsecaseStub) Login(context.Context, string, string) (usecase.AuthResponse, error) { return nil, nil }
 func (authUsecaseStub) Logout(context.Context) error                                          { return nil }
 func (authUsecaseStub) Me(context.Context, string) (*model.User, error)                       { return nil, nil }
 

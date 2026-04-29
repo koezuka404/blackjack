@@ -57,6 +57,7 @@ type DealerStateRepository interface {
 type AuthRepository interface {
 	CreateUser(ctx context.Context, user *model.User) error
 	GetUserByUsername(ctx context.Context, username string) (*model.User, error)
+	GetUserByEmail(ctx context.Context, email string) (*model.User, error)
 	GetUserByID(ctx context.Context, userID string) (*model.User, error)
 	UpsertSession(ctx context.Context, session *model.Session) error
 	GetAuthSession(ctx context.Context, sessionID string) (*model.Session, error)

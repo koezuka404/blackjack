@@ -105,6 +105,7 @@ func (RoundLogRecord) TableName() string { return "round_logs" }
 type UserRecord struct {
 	ID           string    `gorm:"type:uuid;primaryKey"`
 	Username     string    `gorm:"type:varchar(100);not null;uniqueIndex"`
+	Email        string    `gorm:"type:varchar(255);not null;uniqueIndex;column:email"`
 	PasswordHash string    `gorm:"type:varchar(255);not null;column:password_hash"`
 	CreatedAt    time.Time `gorm:"not null;column:created_at"`
 	UpdatedAt    time.Time `gorm:"not null;column:updated_at"`

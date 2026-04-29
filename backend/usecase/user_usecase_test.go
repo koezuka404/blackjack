@@ -16,6 +16,7 @@ import (
 type authStoreStub struct {
 	createUserFn         func(ctx context.Context, user *model.User) error
 	getUserByUsernameFn  func(ctx context.Context, username string) (*model.User, error)
+	getUserByEmailFn     func(ctx context.Context, email string) (*model.User, error)
 	getUserByIDFn        func(ctx context.Context, userID string) (*model.User, error)
 	transactionFn        func(ctx context.Context, fn func(txStore repository.Store) error) error
 	createActionLogFn    func(ctx context.Context, actionLog *model.ActionLog) error
@@ -60,6 +61,12 @@ func (s *authStoreStub) CreateUser(ctx context.Context, user *model.User) error 
 func (s *authStoreStub) GetUserByUsername(ctx context.Context, username string) (*model.User, error) {
 	if s.getUserByUsernameFn != nil {
 		return s.getUserByUsernameFn(ctx, username)
+	}
+	return nil, repository.ErrNotFound
+}
+func (s *authStoreStub) GetUserByEmail(ctx context.Context, email string) (*model.User, error) {
+	if s.getUserByEmailFn != nil {
+		return s.getUserByEmailFn(ctx, email)
 	}
 	return nil, repository.ErrNotFound
 }
@@ -279,9 +286,29 @@ func (s *authStoreStub) ListRoundLogsByRoomID(ctx context.Context, roomID string
 
 func TestAuthUsecase_SignupValidation(t *testing.T) {
 	uc := NewAuthUsecase(&authStoreStub{}, []byte("this-is-a-very-long-secret"))
-	_, err := uc.Signup(context.Background(), "ab", "short")
+	_, err := uc.Signup(context.Background(), "ab", "bad", "short")
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("expected ErrInvalidInput, got %v", err)
+	}
+	for _, tc := range []struct {
+		pass string
+	}{
+		{"12345678"},
+		{"abcdefgh"},
+		{"!@#$%^&*"},
+	} {
+		_, err := uc.Signup(context.Background(), "gooduser", "good@example.com", tc.pass)
+		if !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("password %q: expected ErrInvalidInput, got %v", tc.pass, err)
+		}
+	}
+}
+
+func TestAuthUsecase_Login_UserNotFound(t *testing.T) {
+	uc := NewAuthUsecase(&authStoreStub{}, []byte("this-is-a-very-long-secret"))
+	_, err := uc.Login(context.Background(), "missing@example.com", "password12")
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("expected ErrUnauthorized, got %v", err)
 	}
 }
 
@@ -292,15 +319,15 @@ func TestAuthUsecase_SignupUsernameTaken(t *testing.T) {
 		},
 	}
 	uc := NewAuthUsecase(store, []byte("this-is-a-very-long-secret"))
-	_, err := uc.Signup(context.Background(), "validname", "password12")
-	if !errors.Is(err, ErrUsernameTaken) {
-		t.Fatalf("expected ErrUsernameTaken, got %v", err)
+	_, err := uc.Signup(context.Background(), "validname", "valid@example.com", "password12")
+	if !errors.Is(err, ErrEmailTaken) {
+		t.Fatalf("expected ErrEmailTaken, got %v", err)
 	}
 }
 
 func TestAuthUsecase_SignupSuccess(t *testing.T) {
 	uc := NewAuthUsecase(&authStoreStub{}, []byte("this-is-a-very-long-secret"))
-	res, err := uc.Signup(context.Background(), "validname", "password12")
+	res, err := uc.Signup(context.Background(), "validname", "valid@example.com", "password12")
 	if err != nil {
 		t.Fatalf("signup failed: %v", err)
 	}
@@ -321,20 +348,29 @@ func TestAuthUsecase_LoginAndMe(t *testing.T) {
 		t.Fatalf("hash failed: %v", err)
 	}
 	store := &authStoreStub{
-		getUserByUsernameFn: func(context.Context, string) (*model.User, error) {
-			return &model.User{ID: "user-1", Username: "validname", PasswordHash: string(hash)}, nil
+		getUserByEmailFn: func(context.Context, string) (*model.User, error) {
+			return &model.User{ID: "user-1", Username: "validname", Email: "valid@example.com", PasswordHash: string(hash)}, nil
 		},
 		getUserByIDFn: func(context.Context, string) (*model.User, error) {
-			return &model.User{ID: "user-1", Username: "validname"}, nil
+			return &model.User{ID: "user-1", Username: "validname", Email: "valid@example.com"}, nil
 		},
 	}
 	uc := NewAuthUsecase(store, []byte("this-is-a-very-long-secret"))
 
-	if _, err := uc.Login(context.Background(), "validname", "wrongpass"); !errors.Is(err, ErrUnauthorized) {
+	if _, err := uc.Login(context.Background(), "not-an-email", "password12"); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("expected unauthorized for invalid email, got %v", err)
+	}
+	if _, err := uc.Login(context.Background(), "valid@example.com", ""); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("expected unauthorized for empty password, got %v", err)
+	}
+	if _, err := uc.Login(context.Background(), "  Valid@Example.Com  ", "password12"); err != nil {
+		t.Fatalf("login with trimmed/cased email failed: %v", err)
+	}
+	if _, err := uc.Login(context.Background(), "valid@example.com", "wrongpass"); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("expected unauthorized for wrong password, got %v", err)
 	}
 
-	loginRes, err := uc.Login(context.Background(), "validname", "password12")
+	loginRes, err := uc.Login(context.Background(), "valid@example.com", "password12")
 	if err != nil {
 		t.Fatalf("login failed: %v", err)
 	}
@@ -376,7 +412,7 @@ func TestAuthUsecase_Signup_TransactionGenericError(t *testing.T) {
 		createUserFn: func(context.Context, *model.User) error { return errors.New("db write failed") },
 	}
 	uc := NewAuthUsecase(store, []byte("this-is-a-very-long-secret"))
-	_, err := uc.Signup(context.Background(), "goodname", "password12")
+	_, err := uc.Signup(context.Background(), "goodname", "good@example.com", "password12")
 	if err == nil || err.Error() != "db write failed" {
 		t.Fatalf("expected db write failed, got %v", err)
 	}
@@ -384,7 +420,7 @@ func TestAuthUsecase_Signup_TransactionGenericError(t *testing.T) {
 
 func TestAuthUsecase_Signup_JWTSecretTooShort(t *testing.T) {
 	uc := NewAuthUsecase(&authStoreStub{}, []byte("short"))
-	_, err := uc.Signup(context.Background(), "goodname", "password12")
+	_, err := uc.Signup(context.Background(), "goodname", "good@example.com", "password12")
 	if err == nil || !strings.Contains(err.Error(), "jwt secret") {
 		t.Fatalf("expected jwt secret error, got %v", err)
 	}
@@ -396,12 +432,12 @@ func TestAuthUsecase_Login_JWTSecretTooShort(t *testing.T) {
 		t.Fatalf("hash failed: %v", err)
 	}
 	store := &authStoreStub{
-		getUserByUsernameFn: func(context.Context, string) (*model.User, error) {
-			return &model.User{ID: "user-1", Username: "goodname", PasswordHash: string(hash)}, nil
+		getUserByEmailFn: func(context.Context, string) (*model.User, error) {
+			return &model.User{ID: "user-1", Username: "goodname", Email: "good@example.com", PasswordHash: string(hash)}, nil
 		},
 	}
 	uc := NewAuthUsecase(store, []byte("short"))
-	_, err = uc.Login(context.Background(), "goodname", "password12")
+	_, err = uc.Login(context.Background(), "good@example.com", "password12")
 	if err == nil || !strings.Contains(err.Error(), "jwt secret") {
 		t.Fatalf("expected jwt secret error, got %v", err)
 	}

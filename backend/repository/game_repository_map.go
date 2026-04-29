@@ -222,6 +222,7 @@ func userRecordFromDomain(u *model.User) *UserRecord {
 	return &UserRecord{
 		ID:           u.ID,
 		Username:     u.Username,
+		Email:        u.Email,
 		PasswordHash: u.PasswordHash,
 		CreatedAt:    u.CreatedAt,
 		UpdatedAt:    u.UpdatedAt,
@@ -235,6 +236,7 @@ func userRecordToDomain(m *UserRecord) (*model.User, error) {
 	return &model.User{
 		ID:           m.ID,
 		Username:     m.Username,
+		Email:        m.Email,
 		PasswordHash: m.PasswordHash,
 		CreatedAt:    m.CreatedAt,
 		UpdatedAt:    m.UpdatedAt,

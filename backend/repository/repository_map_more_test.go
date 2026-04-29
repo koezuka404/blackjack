@@ -67,7 +67,7 @@ func TestMapFromToDomain_AllRecords(t *testing.T) {
 		t.Fatalf("dealer roundtrip: %v", err)
 	}
 
-	ur := &model.User{ID: "u1", Username: "alice", PasswordHash: "h", CreatedAt: now, UpdatedAt: now}
+	ur := &model.User{ID: "u1", Username: "alice", Email: "alice@example.com", PasswordHash: "h", CreatedAt: now, UpdatedAt: now}
 	urRec := userRecordFromDomain(ur)
 	if _, err := userRecordToDomain(urRec); err != nil {
 		t.Fatalf("user roundtrip: %v", err)

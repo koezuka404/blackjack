@@ -206,7 +206,7 @@ func TestStore_SQLite_CoversCRUD(t *testing.T) {
 	}
 
 
-	u := &model.User{ID: "u1", Username: "alice", PasswordHash: "hash", CreatedAt: now, UpdatedAt: now}
+	u := &model.User{ID: "u1", Username: "alice", Email: "alice@example.com", PasswordHash: "hash", CreatedAt: now, UpdatedAt: now}
 	if err := s.CreateUser(ctx, u); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -218,6 +218,12 @@ func TestStore_SQLite_CoversCRUD(t *testing.T) {
 	}
 	if _, err := s.GetUserByUsername(ctx, "alice"); err != nil {
 		t.Fatalf("get user by username: %v", err)
+	}
+	if _, err := s.GetUserByEmail(ctx, "alice@example.com"); err != nil {
+		t.Fatalf("get user by email: %v", err)
+	}
+	if _, err := s.GetUserByEmail(ctx, "missing@example.com"); err != ErrNotFound {
+		t.Fatalf("expected ErrNotFound user by email, got %v", err)
 	}
 	if _, err := s.GetUserByID(ctx, "missing"); err != ErrNotFound {
 		t.Fatalf("expected ErrNotFound user by id, got %v", err)

@@ -37,7 +37,7 @@ func TestStore_ClosedDB_PropagatesErrors(t *testing.T) {
 	if err := s.CreateRoundLog(ctx, &model.RoundLog{SessionID: "s1", RoundNo: 1, ResultPayload: `{}`, CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CreateUser(ctx, &model.User{ID: "u1", Username: "a", PasswordHash: "h", CreatedAt: now, UpdatedAt: now}); err != nil {
+	if err := s.CreateUser(ctx, &model.User{ID: "u1", Username: "a", Email: "a@example.com", PasswordHash: "h", CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.UpsertSession(ctx, &model.Session{ID: "tok", UserID: "u1", ExpiresAt: now, CreatedAt: now}); err != nil {
@@ -79,7 +79,7 @@ func TestStore_ClosedDB_PropagatesErrors(t *testing.T) {
 	expectErr("CreateActionLog", s.CreateActionLog(ctx, &model.ActionLog{SessionID: "s1", ActorType: model.ActorTypeUser, ActorUserID: "u1", TargetUserID: "u1", ActionID: "a2", RequestType: "HIT", RequestPayloadHash: "h"}))
 	expectErr("UpsertRematchVote", s.UpsertRematchVote(ctx, &model.RematchVote{SessionID: "s1", UserID: "u2", Agree: false}))
 	expectErr("CreateRoundLog", s.CreateRoundLog(ctx, &model.RoundLog{SessionID: "s1", RoundNo: 9, ResultPayload: `{}`, CreatedAt: now}))
-	expectErr("CreateUser", s.CreateUser(ctx, &model.User{ID: "u2", Username: "b", PasswordHash: "h", CreatedAt: now, UpdatedAt: now}))
+	expectErr("CreateUser", s.CreateUser(ctx, &model.User{ID: "u2", Username: "b", Email: "b@example.com", PasswordHash: "h", CreatedAt: now, UpdatedAt: now}))
 	expectErr("UpsertSession", s.UpsertSession(ctx, &model.Session{ID: "t2", UserID: "u1", ExpiresAt: now, CreatedAt: now}))
 }
 

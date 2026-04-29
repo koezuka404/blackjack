@@ -733,7 +733,7 @@ func TestCoverage_authHooks(t *testing.T) {
 		signupHashPassword = func([]byte, int) ([]byte, error) { return nil, errors.New("bcrypt down") }
 		t.Cleanup(func() { signupHashPassword = prev })
 		uc := NewAuthUsecase(&authStoreStub{}, []byte("this-is-a-very-long-secret"))
-		if _, err := uc.Signup(context.Background(), "gooduser", "password12"); err == nil || err.Error() != "bcrypt down" {
+		if _, err := uc.Signup(context.Background(), "gooduser", "good@example.com", "password12"); err == nil || err.Error() != "bcrypt down" {
 			t.Fatalf("got %v", err)
 		}
 	})

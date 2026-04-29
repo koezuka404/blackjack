@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 var ErrUnauthorized = errors.New("unauthorized")
 var ErrInvalidInput = errors.New("invalid_input")
 var ErrUsernameTaken = errors.New("username_taken")
+var ErrEmailTaken = errors.New("email_taken")
 
 var signupHashPassword = bcrypt.GenerateFromPassword
 
@@ -27,8 +29,8 @@ type AuthResponse interface {
 }
 
 type AuthUsecase interface {
-	Signup(ctx context.Context, username, password string) (AuthResponse, error)
-	Login(ctx context.Context, username, password string) (AuthResponse, error)
+	Signup(ctx context.Context, username, email, password string) (AuthResponse, error)
+	Login(ctx context.Context, email, password string) (AuthResponse, error)
 	Logout(ctx context.Context) error
 	Me(ctx context.Context, userID string) (*model.User, error)
 }
@@ -59,9 +61,29 @@ func NewAuthUsecase(store repository.Store, jwtSecret []byte) AuthUsecase {
 }
 
 
-func (u *authService) Signup(ctx context.Context, username, password string) (AuthResponse, error) {
+var emailPattern = regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s@]+$`)
+
+func hasStrongPassword(password string) bool {
+	if len(password) < 8 {
+		return false
+	}
+	hasLetter := false
+	hasDigit := false
+	for _, r := range password {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			hasLetter = true
+		}
+		if r >= '0' && r <= '9' {
+			hasDigit = true
+		}
+	}
+	return hasLetter && hasDigit
+}
+
+func (u *authService) Signup(ctx context.Context, username, email, password string) (AuthResponse, error) {
 	username = strings.TrimSpace(username)
-	if len(username) < 3 || len(username) > 100 || len(password) < 8 {
+	email = strings.TrimSpace(strings.ToLower(email))
+	if len(username) < 3 || len(username) > 100 || !emailPattern.MatchString(email) || !hasStrongPassword(password) {
 		return nil, ErrInvalidInput
 	}
 	pwHash, err := signupHashPassword([]byte(password), bcrypt.DefaultCost)
@@ -72,6 +94,7 @@ func (u *authService) Signup(ctx context.Context, username, password string) (Au
 	user := &model.User{
 		ID:           uuid.NewString(),
 		Username:     username,
+		Email:        email,
 		PasswordHash: string(pwHash),
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -81,7 +104,7 @@ func (u *authService) Signup(ctx context.Context, username, password string) (Au
 		return tx.CreateUser(ctx, user)
 	}); err != nil {
 		if err == repository.ErrAlreadyExists {
-			return nil, ErrUsernameTaken
+			return nil, ErrEmailTaken
 		}
 		return nil, err
 	}
@@ -94,8 +117,12 @@ func (u *authService) Signup(ctx context.Context, username, password string) (Au
 }
 
 
-func (u *authService) Login(ctx context.Context, username, password string) (AuthResponse, error) {
-	user, err := u.store.GetUserByUsername(ctx, username)
+func (u *authService) Login(ctx context.Context, email, password string) (AuthResponse, error) {
+	email = strings.TrimSpace(strings.ToLower(email))
+	if !emailPattern.MatchString(email) || password == "" {
+		return nil, ErrUnauthorized
+	}
+	user, err := u.store.GetUserByEmail(ctx, email)
 	if err != nil {
 		return nil, ErrUnauthorized
 	}

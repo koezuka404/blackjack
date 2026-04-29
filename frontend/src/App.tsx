@@ -14,6 +14,7 @@ type LoginResponse = {
   user: {
     id: string
     username: string
+    email?: string
   }
 }
 
@@ -134,8 +135,10 @@ export function parseAPIError(error: unknown): string {
           return 'このユーザー名は既に使われています'
         case 'invalid_input':
           return '入力内容が正しくありません'
+        case 'email_taken':
+          return 'このメールアドレスは既に使われています'
         case 'unauthorized':
-          return ''
+          return payload.error.message || 'メールアドレスまたはパスワードが違います'
         case 'forbidden':
           return 'この操作は許可されていません'
         case 'invalid_game_state':
@@ -303,6 +306,7 @@ export function formatPlayerTurnCountdown(remainingMs: number): { text: string; 
 
 function App() {
   const [username, setUsername] = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [token, setToken] = useState(localStorage.getItem(TOKEN_STORAGE_KEY) ?? '')
   const [roomID, setRoomID] = useState('')
@@ -355,6 +359,7 @@ function App() {
     setToken('')
     localStorage.removeItem(TOKEN_STORAGE_KEY)
     setUsername('')
+    setEmail('')
     setPassword('')
     setRoomID('')
     setRooms([])
@@ -405,7 +410,6 @@ function App() {
       (error) => {
         if (axios.isAxiosError(error) && error.response?.status === 401) {
           clearAuthState()
-          setStatusMessage('セッションが切れました。再ログインしてください')
         }
         return Promise.reject(error)
       },
@@ -416,6 +420,15 @@ function App() {
       }
     }
   }, [authClient, clearAuthState])
+
+  useEffect(() => {
+    if (!token) {
+      return
+    }
+    authClient.get<ApiResponse<{ id: string; username: string }>>('/me').catch(() => {
+      // 401 is handled by the shared response interceptor.
+    })
+  }, [authClient, token])
 
   const appendWSLog = (message: string) => {
     setWsLog((prev) => [`${new Date().toISOString()} ${message}`, ...prev].slice(0, 60))
@@ -430,18 +443,13 @@ function App() {
     wsReconnectDeadlineRef.current = Date.now() + delayMs
     setWsReconnectBannerVisible(true)
     const tick = () => {
-      const d = wsReconnectDeadlineRef.current
-      if (d === null) {
-        return
-      }
+      const d = wsReconnectDeadlineRef.current as number
       const msLeft = d - Date.now()
       const left = Math.max(0, Math.ceil(msLeft / 1000))
       setWsReconnectRemainingSec(left > 0 ? left : 0)
       if (msLeft <= 0) {
-        if (wsReconnectDisplayIntervalRef.current) {
-          clearInterval(wsReconnectDisplayIntervalRef.current)
-          wsReconnectDisplayIntervalRef.current = null
-        }
+        clearInterval(wsReconnectDisplayIntervalRef.current as number)
+        wsReconnectDisplayIntervalRef.current = null
         return
       }
     }
@@ -467,9 +475,29 @@ function App() {
   }
 
   const signup = async () => {
+    const trimmedUsername = username.trim()
+    const trimmedEmail = email.trim()
+    const hasStrongPassword = /^(?=.*[A-Za-z])(?=.*\d).{8,}$/.test(password)
+    if (!trimmedUsername || !trimmedEmail || !password) {
+      setStatusMessage('ユーザー名・メールアドレス・パスワードを入力してください')
+      return
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      setStatusMessage('メールアドレスの形式が正しくありません')
+      return
+    }
+    if (trimmedUsername.length < 3 || trimmedUsername.length > 100) {
+      setStatusMessage('ユーザー名は3〜100文字で入力してください')
+      return
+    }
+    if (!hasStrongPassword) {
+      setStatusMessage('パスワードは8文字以上で英字と数字を含めてください')
+      return
+    }
     await withStatus('新規登録', async () => {
       const response = await authClient.post<ApiResponse<LoginResponse>>('/auth/signup', {
-        username,
+        username: trimmedUsername,
+        email: trimmedEmail,
         password,
       })
       saveToken(unwrapData(response.data).access_token)
@@ -477,9 +505,14 @@ function App() {
   }
 
   const login = async () => {
+    const trimmedEmail = email.trim()
+    if (!trimmedEmail || !password) {
+      setStatusMessage('メールアドレスとパスワードを入力してください')
+      return
+    }
     await withStatus('ログイン', async () => {
       const response = await authClient.post<ApiResponse<LoginResponse>>('/auth/login', {
-        username,
+        email: trimmedEmail,
         password,
       })
 
@@ -489,8 +522,11 @@ function App() {
 
   const logout = async () => {
     await withStatus('ログアウト', async () => {
-      await authClient.post('/auth/logout')
-      clearAuthState()
+      try {
+        await authClient.post('/auth/logout')
+      } finally {
+        clearAuthState()
+      }
     })
   }
 
@@ -512,13 +548,6 @@ function App() {
   }
 
   const joinRoom = async () => {
-
-    if (!token) {
-
-      setStatusMessage('先にログインしてください')
-      return
-    }
-
     const rid = roomID.trim()
     if (!rid) {
       setStatusMessage('ルームIDを入力してください')
@@ -539,13 +568,6 @@ function App() {
   }
 
   const startRoom = async () => {
-
-    if (!token) {
-
-      setStatusMessage('先にログインしてください')
-      return
-    }
-
     const rid = roomID.trim()
     if (!rid) {
       setStatusMessage('ルームIDを入力してください')
@@ -612,10 +634,6 @@ function App() {
       return
     }
 
-    if (!nextToken) {
-      setStatusMessage('接続失敗: 先にログインしてください')
-      return
-    }
     clearReconnectCountdown()
     if (wsRef.current) {
       silentWsReplaceCloseRef.current = true
@@ -703,9 +721,6 @@ function App() {
       startReconnectCountdown(delayMs)
       wsReconnectTimerRef.current = setTimeout(() => {
         wsReconnectTimerRef.current = null
-        if (!maintainWsConnectionRef.current || !isInRoomRef.current) {
-          return
-        }
         if (!roomIDRef.current.trim() || !tokenRef.current) {
           return
         }
@@ -791,14 +806,6 @@ function App() {
   }
 
   const joinRoomFlow = async () => {
-
-    if (!token) {
-
-      setStatusMessage('先にログインしてください')
-      return
-    }
-
-
     setHasStartedCurrentRoom(false)
     setIsJoiningRoom(true)
     await withStatus('ルーム参加', async () => {
@@ -828,23 +835,6 @@ function App() {
   }
 
   const leaveRoomFlow = async () => {
-
-    if (!token) {
-
-      setStatusMessage('先にログインしてください')
-      return
-    }
-    if (!roomID.trim()) {
-
-      setStatusMessage('先にルームに入ってください')
-      return
-    }
-    if (roomState?.session.id) {
-
-      setStatusMessage('対局中はルーム退出できません')
-      return
-    }
-
     await withStatus('ルーム退出', async () => {
       await authClient.post<ApiResponse<{ room: RoomSummary }>>(`/rooms/${roomID}/leave`, {})
       maintainWsConnectionRef.current = false
@@ -859,29 +849,14 @@ function App() {
         wsReconnectTimerRef.current = null
       }
       clearReconnectCountdown()
-      if (wsRef.current) {
-
-        wsRef.current.close()
-        wsRef.current = null
-      }
+      wsRef.current?.close()
+      wsRef.current = null
 
       setWsConnectionState('disconnected')
     })
   }
 
   const startGameFlow = async () => {
-
-    if (!token) {
-
-      setStatusMessage('先にログインしてください')
-      return
-    }
-    if (!roomID.trim()) {
-
-      setStatusMessage('先にルームIDを指定してルームに入ってください')
-      return
-    }
-
     setIsStartingGame(true)
     await withStatus('ゲーム開始', async () => {
       await authClient.post<ApiResponse<{ session: { version: number } }>>(`/rooms/${roomID}/start`, {})
@@ -909,12 +884,24 @@ function App() {
           <h2>{authMode === 'login' ? 'ログイン' : '新規登録'}</h2>
           <form
             className="row auth-form"
+            noValidate
             onSubmit={(event: FormEvent<HTMLFormElement>) => {
               event.preventDefault()
               void (authMode === 'login' ? login() : signup())
             }}
           >
-            <input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="ユーザー名" />
+            {authMode === 'signup' && (
+              <input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="ユーザー名" />
+            )}
+            {(authMode === 'signup' || authMode === 'login') && (
+              <input
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder="メールアドレス"
+                type="email"
+                autoComplete="email"
+              />
+            )}
             <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="パスワード" type="password" />
             <button type="submit">{authMode === 'login' ? 'ログインする' : '新規登録する'}</button>
           </form>
@@ -963,7 +950,7 @@ function App() {
           {outcomeView.tone !== 'idle' && <div className={`result-banner result-${outcomeView.tone}`}>{outcomeView.text}</div>}
         </div>
         <div className="row start-row">
-          <button onClick={joinRoomFlow} className="btn-join-room" disabled={isJoiningRoom || isInRoom}>
+          <button onClick={joinRoomFlow} className="btn-join-room" disabled={isJoiningRoom || isInRoom || !token}>
             {isJoiningRoom ? '参加中…' : 'AIと対戦する'}
           </button>
           <button
@@ -1142,7 +1129,7 @@ function App() {
           <section className="panel tech-panel">
             <h2>ルーム操作</h2>
             <div className="row">
-              <button onClick={joinRoomFlow}>AIと対戦する</button>
+              <button onClick={joinRoomFlow} disabled={!token}>AIと対戦する</button>
               <input value={roomID} onChange={(event) => setRoomID(event.target.value)} placeholder="ルームID" />
               <button onClick={createRoom}>作成</button>
               <button onClick={listRooms}>一覧</button>

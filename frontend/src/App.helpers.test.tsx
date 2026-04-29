@@ -55,6 +55,27 @@ describe('App helper functions', () => {
     expect(
       parseAPIError({
         isAxiosError: true,
+        response: { data: { success: false, error: { code: 'unauthorized', message: 'nope' } } },
+        message: 'Request failed',
+      }),
+    ).toBe('nope')
+    expect(
+      parseAPIError({
+        isAxiosError: true,
+        response: { data: { success: false, error: { code: 'unauthorized', message: '' } } },
+        message: 'Request failed',
+      }),
+    ).toBe('メールアドレスまたはパスワードが違います')
+    expect(
+      parseAPIError({
+        isAxiosError: true,
+        response: { data: { success: false, error: { code: 'email_taken', message: 'taken' } } },
+        message: 'Request failed',
+      }),
+    ).toBe('このメールアドレスは既に使われています')
+    expect(
+      parseAPIError({
+        isAxiosError: true,
         response: { data: { success: false, error: { code: 'invalid_game_state', message: 'invalid' } } },
         message: 'Request failed',
       }),
@@ -100,7 +121,7 @@ describe('App helper functions', () => {
         response: { data: { success: false, error: { code: 'unauthorized', message: 'unauthorized' } } },
         message: 'Request failed',
       }),
-    ).toBe('')
+    ).toBe('unauthorized')
     expect(parseAPIError({ isAxiosError: true, message: 'network', response: undefined })).toBe('通信エラーが発生しました')
     expect(parseAPIError({ isAxiosError: true, message: '', response: undefined })).toBe('不明なエラーが発生しました')
     expect(parseAPIError(new Error('bad'))).toBe('bad')
@@ -116,6 +137,42 @@ describe('App helper functions', () => {
     Object.defineProperty(globalThis, 'crypto', { value: undefined, configurable: true })
     expect(randomID('test')).toMatch(/^test-/)
     Object.defineProperty(globalThis, 'crypto', { value: originalCrypto, configurable: true })
+  })
+
+  it('resolves explicit env base URLs and fallback without window', () => {
+    const originalWindow = globalThis.window
+    vi.stubEnv('VITE_API_BASE_URL', 'https://api.example.com')
+    vi.stubEnv('VITE_WS_BASE_URL', 'wss://ws.example.com')
+    expect(resolveApiBaseURL()).toBe('https://api.example.com/api')
+    expect(resolveWsBaseURL()).toBe('wss://ws.example.com/ws')
+
+    vi.unstubAllEnvs()
+    Object.defineProperty(globalThis, 'window', { value: undefined, configurable: true })
+    expect(resolveApiBaseURL()).toBe('http://localhost:8080/api')
+    expect(resolveWsBaseURL()).toBe('ws://localhost:8080/ws')
+    Object.defineProperty(globalThis, 'window', { value: originalWindow, configurable: true })
+  })
+
+  it('keeps explicit /api and /ws env suffixes and https ws protocol', () => {
+    vi.stubEnv('VITE_API_BASE_URL', 'https://api.example.com/api')
+    vi.stubEnv('VITE_WS_BASE_URL', 'wss://ws.example.com/ws')
+    expect(resolveApiBaseURL()).toBe('https://api.example.com/api')
+    expect(resolveWsBaseURL()).toBe('wss://ws.example.com/ws')
+
+    vi.unstubAllEnvs()
+    const originalWindow = globalThis.window
+    Object.defineProperty(globalThis, 'window', {
+      value: {
+        location: {
+          protocol: 'https:',
+          host: 'example.com',
+          origin: 'https://example.com',
+        },
+      },
+      configurable: true,
+    })
+    expect(resolveWsBaseURL()).toBe('wss://example.com/ws')
+    Object.defineProperty(globalThis, 'window', { value: originalWindow, configurable: true })
   })
 
   it('unwraps API success and throws on failure', () => {

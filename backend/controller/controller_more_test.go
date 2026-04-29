@@ -74,7 +74,7 @@ func TestRoomControllerResetAndAuthErrors(t *testing.T) {
 	}
 
 	auth := NewAuthController(authUsecaseStub{
-		signupFn: func(context.Context, string, string) (usecase.AuthResponse, error) {
+		signupFn: func(context.Context, string, string, string) (usecase.AuthResponse, error) {
 			return nil, errors.New("internal")
 		},
 		loginFn: func(context.Context, string, string) (usecase.AuthResponse, error) {
@@ -85,10 +85,10 @@ func TestRoomControllerResetAndAuthErrors(t *testing.T) {
 		},
 	})
 	cLogin, recLogin := newJSONContext(t, http.MethodPost, "/api/auth/login", map[string]any{
-		"username": "a", "password": "bbbbbbbb",
+		"email": "a@example.com", "password": "bbbbbbbb",
 	})
 	cSignup, recSignup := newJSONContext(t, http.MethodPost, "/api/auth/signup", map[string]any{
-		"username": "alice", "password": "password12",
+		"username": "alice", "email": "alice@example.com", "password": "password12",
 	})
 	_ = auth.Signup(cSignup)
 	if recSignup.Code != http.StatusInternalServerError {

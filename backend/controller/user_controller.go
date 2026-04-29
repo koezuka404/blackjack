@@ -16,7 +16,13 @@ type AuthController struct {
 }
 
 type loginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type signupRequest struct {
 	Username string `json:"username"`
+	Email    string `json:"email"`
 	Password string `json:"password"`
 }
 
@@ -35,19 +41,19 @@ func (a *AuthController) Register(g *echo.Group) {
 
 
 func (a *AuthController) Signup(c echo.Context) error {
-	var req loginRequest
-	if err := c.Bind(&req); err != nil || req.Username == "" || req.Password == "" {
-		return c.JSON(http.StatusBadRequest, dto.Fail("invalid_input", "username and password are required"))
+	var req signupRequest
+	if err := c.Bind(&req); err != nil || req.Username == "" || req.Email == "" || req.Password == "" {
+		return c.JSON(http.StatusBadRequest, dto.Fail("invalid_input", "ユーザー名・メールアドレス・パスワードを入力してください"))
 	}
-	res, err := a.auth.Signup(c.Request().Context(), req.Username, req.Password)
+	res, err := a.auth.Signup(c.Request().Context(), req.Username, req.Email, req.Password)
 	if err != nil {
 		switch {
 		case errors.Is(err, usecase.ErrInvalidInput):
-			return c.JSON(http.StatusBadRequest, dto.Fail("invalid_input", "username must be 3-100 chars and password must be at least 8 chars"))
-		case errors.Is(err, usecase.ErrUsernameTaken):
-			return c.JSON(http.StatusConflict, dto.Fail("username_taken", "username already exists"))
+			return c.JSON(http.StatusBadRequest, dto.Fail("invalid_input", "ユーザー名は3〜100文字、メール形式、パスワードは8文字以上の英字+数字で入力してください"))
+		case errors.Is(err, usecase.ErrUsernameTaken), errors.Is(err, usecase.ErrEmailTaken):
+			return c.JSON(http.StatusConflict, dto.Fail("email_taken", "ユーザー名またはメールアドレスは既に使われています"))
 		default:
-			return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
+			return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", "サーバーエラーが発生しました"))
 		}
 	}
 	return c.JSON(http.StatusCreated, dto.OK(map[string]any{
@@ -57,6 +63,7 @@ func (a *AuthController) Signup(c echo.Context) error {
 		"user": map[string]any{
 			"id":       res.User().ID,
 			"username": res.User().Username,
+			"email":    res.User().Email,
 		},
 	}))
 }
@@ -64,15 +71,15 @@ func (a *AuthController) Signup(c echo.Context) error {
 
 func (a *AuthController) Login(c echo.Context) error {
 	var req loginRequest
-	if err := c.Bind(&req); err != nil || req.Username == "" || req.Password == "" {
-		return c.JSON(http.StatusBadRequest, dto.Fail("invalid_input", "username and password are required"))
+	if err := c.Bind(&req); err != nil || req.Email == "" || req.Password == "" {
+		return c.JSON(http.StatusBadRequest, dto.Fail("invalid_input", "メールアドレスとパスワードを入力してください"))
 	}
-	res, err := a.auth.Login(c.Request().Context(), req.Username, req.Password)
+	res, err := a.auth.Login(c.Request().Context(), req.Email, req.Password)
 	if err != nil {
 		if errors.Is(err, usecase.ErrUnauthorized) {
-			return c.JSON(http.StatusUnauthorized, dto.Fail("unauthorized", "invalid credentials"))
+			return c.JSON(http.StatusUnauthorized, dto.Fail("unauthorized", "メールアドレスまたはパスワードが違います"))
 		}
-		return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", err.Error()))
+		return c.JSON(http.StatusInternalServerError, dto.Fail("internal_error", "サーバーエラーが発生しました"))
 	}
 	return c.JSON(http.StatusOK, dto.OK(map[string]any{
 		"access_token": res.SessionToken(),
@@ -81,6 +88,7 @@ func (a *AuthController) Login(c echo.Context) error {
 		"user": map[string]any{
 			"id":       res.User().ID,
 			"username": res.User().Username,
+			"email":    res.User().Email,
 		},
 	}))
 }
@@ -95,14 +103,15 @@ func (a *AuthController) Logout(c echo.Context) error {
 func (a *AuthController) Me(c echo.Context) error {
 	userID, _ := c.Get("user_id").(string)
 	if userID == "" {
-		return c.JSON(http.StatusUnauthorized, dto.Fail("unauthorized", "not logged in"))
+		return c.JSON(http.StatusUnauthorized, dto.Fail("unauthorized", "ログインしてください"))
 	}
 	user, err := a.auth.Me(c.Request().Context(), userID)
 	if err != nil {
-		return c.JSON(http.StatusUnauthorized, dto.Fail("unauthorized", "not logged in"))
+		return c.JSON(http.StatusUnauthorized, dto.Fail("unauthorized", "ログインしてください"))
 	}
 	return c.JSON(http.StatusOK, dto.OK(map[string]any{
 		"id":       user.ID,
 		"username": user.Username,
+		"email":    user.Email,
 	}))
 }

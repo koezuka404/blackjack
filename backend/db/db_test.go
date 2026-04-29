@@ -89,3 +89,49 @@ func TestConfigureSQLDB(t *testing.T) {
 	}
 }
 
+func TestIntFromEnv(t *testing.T) {
+	key := "DB_TEST_INT_FROM_ENV"
+	t.Setenv(key, "")
+	if got := intFromEnv(key, 12); got != 12 {
+		t.Fatalf("empty env should fallback, got=%d", got)
+	}
+
+	t.Setenv(key, "64")
+	if got := intFromEnv(key, 12); got != 64 {
+		t.Fatalf("valid env should parse, got=%d", got)
+	}
+
+	t.Setenv(key, "oops")
+	if got := intFromEnv(key, 12); got != 12 {
+		t.Fatalf("invalid number should fallback, got=%d", got)
+	}
+
+	t.Setenv(key, "0")
+	if got := intFromEnv(key, 12); got != 12 {
+		t.Fatalf("non-positive number should fallback, got=%d", got)
+	}
+}
+
+func TestDurationFromEnv(t *testing.T) {
+	key := "DB_TEST_DURATION_FROM_ENV"
+	t.Setenv(key, "")
+	if got := durationFromEnv(key, 2*time.Minute); got != 2*time.Minute {
+		t.Fatalf("empty env should fallback, got=%s", got)
+	}
+
+	t.Setenv(key, "45s")
+	if got := durationFromEnv(key, 2*time.Minute); got != 45*time.Second {
+		t.Fatalf("valid duration should parse, got=%s", got)
+	}
+
+	t.Setenv(key, "not-a-duration")
+	if got := durationFromEnv(key, 2*time.Minute); got != 2*time.Minute {
+		t.Fatalf("invalid duration should fallback, got=%s", got)
+	}
+
+	t.Setenv(key, "-10s")
+	if got := durationFromEnv(key, 2*time.Minute); got != 2*time.Minute {
+		t.Fatalf("non-positive duration should fallback, got=%s", got)
+	}
+}
+
