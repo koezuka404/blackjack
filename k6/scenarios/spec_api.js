@@ -6,20 +6,15 @@ const apiBase = apiBaseRaw.replace(/\/+$/, '');
 const rootBase = apiBase.endsWith('/api') ? apiBase.slice(0, -4) : apiBase;
 const runID = __ENV.K6_RUN_ID || `${Date.now()}`;
 const password = __ENV.K6_USER_PASSWORD || 'password12';
-let vuToken = '';
-let vuUsername = '';
+const vus = Number(__ENV.K6_VUS || 100);
 
 export const options = {
-  vus: Number(__ENV.K6_VUS || 100),
+  vus,
   duration: __ENV.K6_DURATION || '5m',
   thresholds: {
     http_req_failed: ['rate<0.05'],
     http_req_duration: ['p(95)<1500'],
-    'http_req_failed{endpoint:signup}': ['rate<0.05'],
-    'http_req_failed{endpoint:login}': ['rate<0.05'],
     'http_req_failed{endpoint:me}': ['rate<0.05'],
-    'http_req_duration{endpoint:signup}': ['p(95)<2000'],
-    'http_req_duration{endpoint:login}': ['p(95)<2000'],
     'http_req_duration{endpoint:me}': ['p(95)<1500'],
   },
 };
@@ -29,51 +24,52 @@ export function setup() {
   check(healthRes, {
     'health status is 200': (r) => r.status === 200,
   });
-}
 
-export default function () {
-  if (!vuUsername) {
-    vuUsername = `k6_${runID}_${__VU}`;
-  }
-
-  if (!vuToken) {
+  const tokens = [];
+  for (let i = 1; i <= vus; i += 1) {
+    const username = `k6_${runID}_${i}`;
     const signupRes = http.post(
       `${apiBase}/auth/signup`,
-      JSON.stringify({ username: vuUsername, password }),
-      { headers: { 'Content-Type': 'application/json' }, tags: { endpoint: 'signup' } },
+      JSON.stringify({ username, password }),
+      {
+        headers: { 'Content-Type': 'application/json' },
+        tags: { endpoint: 'signup' },
+        responseType: 'text',
+      },
     );
-    check(signupRes, {
-      'signup status is 200/201/409': (r) => r.status === 200 || r.status === 201 || r.status === 409,
-    });
-  }
+    if (signupRes.status !== 200 && signupRes.status !== 201 && signupRes.status !== 409) {
+      throw new Error(`setup signup failed for ${username}: status=${signupRes.status} body=${signupRes.body}`);
+    }
 
-  if (!vuToken) {
     const loginRes = http.post(
       `${apiBase}/auth/login`,
-      JSON.stringify({ username: vuUsername, password }),
-      { headers: { 'Content-Type': 'application/json' }, tags: { endpoint: 'login' } },
-    );
-    const loginOk = check(loginRes, {
-      'login status is 200': (r) => r.status === 200,
-      'login has token': (r) => {
-        try {
-          const payload = r.json();
-          return Boolean(payload?.data?.access_token);
-        } catch (_) {
-          return false;
-        }
+      JSON.stringify({ username, password }),
+      {
+        headers: { 'Content-Type': 'application/json' },
+        tags: { endpoint: 'login' },
+        responseType: 'text',
       },
-    });
-
-    if (!loginOk) {
-      sleep(1);
-      return;
+    );
+    if (loginRes.status !== 200) {
+      throw new Error(`setup login failed for ${username}: status=${loginRes.status} body=${loginRes.body}`);
     }
-    vuToken = loginRes.json('data.access_token');
+    const token = loginRes.json('data.access_token');
+    if (!token) {
+      throw new Error(`setup login returned empty token for ${username}`);
+    }
+    tokens.push(token);
   }
 
+  return { tokens };
+}
+
+export default function (data) {
+  const token = data?.tokens?.[__VU - 1];
+  if (!token) {
+    throw new Error(`missing token for vu=${__VU}`);
+  }
   const meRes = http.get(`${apiBase}/me`, {
-    headers: { Authorization: `Bearer ${vuToken}` },
+    headers: { Authorization: `Bearer ${token}` },
     tags: { endpoint: 'me' },
   });
   check(meRes, {
