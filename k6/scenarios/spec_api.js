@@ -29,9 +29,10 @@ export function setup() {
   const tokens = [];
   for (let i = 1; i <= vus; i += 1) {
     const username = `k6_${runID}_${i}`;
+    const email = `${username}@k6.local`;
     const signupRes = http.post(
       `${apiBase}/auth/signup`,
-      JSON.stringify({ username, password }),
+      JSON.stringify({ username, email, password }),
       {
         headers: { 'Content-Type': 'application/json' },
         tags: { endpoint: 'signup' },
@@ -44,7 +45,7 @@ export function setup() {
 
     const loginRes = http.post(
       `${apiBase}/auth/login`,
-      JSON.stringify({ username, password }),
+      JSON.stringify({ email, password }),
       {
         headers: { 'Content-Type': 'application/json' },
         tags: { endpoint: 'login' },

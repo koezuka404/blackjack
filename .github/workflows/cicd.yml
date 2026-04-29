@@ -239,9 +239,10 @@ jobs:
           curl -fsS "$ORIGIN/health" >/dev/null
 
           USER="smoke_$(date +%s)"
+          EMAIL="${USER}@smoke.local"
           PASS="password12"
           SIGNUP=$(curl -sS -c cookies.txt -b cookies.txt -H "Content-Type: application/json" \
-            -d "{\"username\":\"$USER\",\"password\":\"$PASS\"}" "$API_BASE_URL/auth/signup")
+            -d "{\"username\":\"$USER\",\"email\":\"$EMAIL\",\"password\":\"$PASS\"}" "$API_BASE_URL/auth/signup")
           SIGNUP_SUCCESS=$(echo "$SIGNUP" | jq -r '.success // false')
           if [ "$SIGNUP_SUCCESS" != "true" ]; then
             echo "signup failed: $SIGNUP"
@@ -250,7 +251,7 @@ jobs:
           CSRF=$(echo "$SIGNUP" | jq -r '.data.csrf_token // ""')
 
           LOGIN=$(curl -sS -c cookies.txt -b cookies.txt -H "Content-Type: application/json" \
-            -d "{\"username\":\"$USER\",\"password\":\"$PASS\"}" "$API_BASE_URL/auth/login")
+            -d "{\"email\":\"$EMAIL\",\"password\":\"$PASS\"}" "$API_BASE_URL/auth/login")
           TOKEN=$(echo "$LOGIN" | jq -r '.data.access_token // empty')
           if [ -z "$CSRF" ]; then
             CSRF=$(echo "$LOGIN" | jq -r '.data.csrf_token // ""')
