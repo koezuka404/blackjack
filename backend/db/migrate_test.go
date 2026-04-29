@@ -16,14 +16,17 @@ func TestMigrate_ErrorsAndSuccess(t *testing.T) {
 	prevAuto := autoMigrateFn
 	prevFK := ensureForeignKeysFn
 	prevIdx := ensurePlayerStatesSessionSeatUniqueIndexFn
+	prevLegacy := ensureLegacyUsersEmailFn
 	t.Cleanup(func() {
 		autoMigrateFn = prevAuto
 		ensureForeignKeysFn = prevFK
 		ensurePlayerStatesSessionSeatUniqueIndexFn = prevIdx
+		ensureLegacyUsersEmailFn = prevLegacy
 	})
 
 	gdb := &gorm.DB{}
 
+	ensureLegacyUsersEmailFn = func(*gorm.DB) error { return nil }
 	autoMigrateFn = func(*gorm.DB, ...any) error { return errors.New("auto") }
 	if err := Migrate(gdb); err == nil || err.Error() != "auto" {
 		t.Fatalf("unexpected error: %v", err)
@@ -44,6 +47,16 @@ func TestMigrate_ErrorsAndSuccess(t *testing.T) {
 	ensurePlayerStatesSessionSeatUniqueIndexFn = func(*gorm.DB) error { return nil }
 	if err := Migrate(gdb); err != nil {
 		t.Fatalf("unexpected success error: %v", err)
+	}
+}
+
+func TestMigrate_LegacyEmailFailurePropagates(t *testing.T) {
+	prevLegacy := ensureLegacyUsersEmailFn
+	t.Cleanup(func() { ensureLegacyUsersEmailFn = prevLegacy })
+	gdb := &gorm.DB{}
+	ensureLegacyUsersEmailFn = func(*gorm.DB) error { return errors.New("legacy") }
+	if err := Migrate(gdb); err == nil || err.Error() != "legacy" {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
