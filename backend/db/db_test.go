@@ -62,8 +62,8 @@ func TestOpen_AndPing_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("db handle: %v", err)
 	}
-	if stats := sqlDB.Stats(); stats.MaxOpenConnections != 20 {
-		t.Fatalf("expected max open conns=20, got=%d", stats.MaxOpenConnections)
+	if stats := sqlDB.Stats(); stats.MaxOpenConnections != 80 {
+		t.Fatalf("expected max open conns=80, got=%d", stats.MaxOpenConnections)
 	}
 }
 
@@ -84,8 +84,8 @@ func TestConfigureSQLDB(t *testing.T) {
 		t.Fatalf("db handle: %v", err)
 	}
 	configureSQLDB(sqlDB)
-	if stats := sqlDB.Stats(); stats.MaxOpenConnections != 20 {
-		t.Fatalf("expected max open conns=20, got=%d", stats.MaxOpenConnections)
+	if stats := sqlDB.Stats(); stats.MaxOpenConnections != 80 {
+		t.Fatalf("expected max open conns=80, got=%d", stats.MaxOpenConnections)
 	}
 }
 
